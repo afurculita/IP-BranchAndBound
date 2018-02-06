@@ -8,5 +8,38 @@
     <artifactId>IP-BranchAndBound</artifactId>
     <version>1.0-SNAPSHOT</version>
 
+    <dependencies>
+        <!-- https://mvnrepository.com/artifact/org.sat4j/org.sat4j.core -->
+        <dependency>
+            <groupId>org.sat4j</groupId>
+            <artifactId>org.sat4j.core</artifactId>
+            <version>2.3.1</version>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/org.sat4j/org.sat4j.csp -->
+        <dependency>
+            <groupId>org.sat4j</groupId>
+            <artifactId>org.sat4j.csp</artifactId>
+            <version>2.3.0</version>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/org.sat4j/org.sat4j.maxsat -->
+        <dependency>
+            <groupId>org.sat4j</groupId>
+            <artifactId>org.sat4j.maxsat</artifactId>
+            <version>2.3.1</version>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/org.sat4j/org.sat4j.sat -->
+        <dependency>
+            <groupId>org.sat4j</groupId>
+            <artifactId>org.sat4j.sat</artifactId>
+            <version>2.3.0</version>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/org.sat4j/org.sat4j.pb -->
+        <dependency>
+            <groupId>org.sat4j</groupId>
+            <artifactId>org.sat4j.pb</artifactId>
+            <version>2.3.1</version>
+        </dependency>
+
+    </dependencies>
     
 </project>
