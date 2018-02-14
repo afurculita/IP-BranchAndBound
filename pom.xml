@@ -7,39 +7,38 @@
     <groupId>ro.uaic</groupId>
     <artifactId>IP-BranchAndBound</artifactId>
     <version>1.0-SNAPSHOT</version>
-
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <source>1.8</source>
+                    <target>1.8</target>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
     <dependencies>
-        <!-- https://mvnrepository.com/artifact/org.sat4j/org.sat4j.core -->
         <dependency>
             <groupId>org.sat4j</groupId>
             <artifactId>org.sat4j.core</artifactId>
             <version>2.3.1</version>
         </dependency>
-        <!-- https://mvnrepository.com/artifact/org.sat4j/org.sat4j.csp -->
         <dependency>
-            <groupId>org.sat4j</groupId>
-            <artifactId>org.sat4j.csp</artifactId>
-            <version>2.3.0</version>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-math3</artifactId>
+            <version>3.6.1</version>
         </dependency>
-        <!-- https://mvnrepository.com/artifact/org.sat4j/org.sat4j.maxsat -->
         <dependency>
-            <groupId>org.sat4j</groupId>
-            <artifactId>org.sat4j.maxsat</artifactId>
-            <version>2.3.1</version>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>2.10.0</version>
         </dependency>
-        <!-- https://mvnrepository.com/artifact/org.sat4j/org.sat4j.sat -->
         <dependency>
-            <groupId>org.sat4j</groupId>
-            <artifactId>org.sat4j.sat</artifactId>
-            <version>2.3.0</version>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>2.10.0</version>
         </dependency>
-        <!-- https://mvnrepository.com/artifact/org.sat4j/org.sat4j.pb -->
-        <dependency>
-            <groupId>org.sat4j</groupId>
-            <artifactId>org.sat4j.pb</artifactId>
-            <version>2.3.1</version>
-        </dependency>
-
     </dependencies>
-    
 </project>
