@@ -7,8 +7,10 @@ import java.util.*;
 public class Solver {
     private List<Integer> branchingOrder;
     private IP1Problem ip1Problem;
+    private SATProblem problem;
 
     public boolean solve(SATProblem problem) {
+        this.problem = problem;
         ip1Problem = new IP1Problem(problem);
 
         // Obtain the branching order S
@@ -36,16 +38,14 @@ public class Solver {
     }
 
     private Node branchAndBound() {
-        Node best = new Node();
-
         Node root = new Node();
         root.computeBound();
 
         if (root.bound == 0.0) {
-            best = root;
-
-            return best;
+            return root;
         }
+
+        Node best = root;
 
         PriorityQueue<Node> q = new PriorityQueue<>();
         q.offer(root);
@@ -54,6 +54,10 @@ public class Solver {
             Node node = q.poll();
 
             if (branchingOrder.size() < node.h + 1) {
+                break;
+            }
+
+            if (node.taken.size() + 1 == problem.n()) {
                 break;
             }
 
@@ -109,7 +113,7 @@ public class Solver {
         }
 
         void computeBound() {
-            bound = ip1Problem.solveWith(taken);
+            bound = new IP1Problem(ip1Problem, taken).solveRelaxation();
         }
     }
 }

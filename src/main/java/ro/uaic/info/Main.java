@@ -13,7 +13,7 @@ public class Main {
         DimacsReader reader = new DimacsReader(new Solver());
 
         // String filename = args[0];
-        String filename = "datasets/flat30-60/flat30-1.cnf";
+        String filename = "datasets/quinn.cnf";
 
         SATProblem problem = reader.parseInstance(filename);
         if (problem.isSatisfiable()) {
