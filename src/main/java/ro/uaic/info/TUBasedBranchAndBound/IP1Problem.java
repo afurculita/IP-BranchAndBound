@@ -59,7 +59,7 @@ class IP1Problem {
 
             RealVector col = ip1Problem.A.getColumnVector(column);
 
-            this.b.subtract(col);
+            this.b.add(col);
         });
     }
 
