@@ -12,14 +12,15 @@ class BranchingOrderResolver {
 
     private List<Integer> S;
 
-    public List<Integer> resolve(SATProblem problem) {
+    public List<Integer> resolve(SATProblem problem, IP1Problem ip1Problem) {
         S = new ArrayList<>(problem.n());
 
         LOGGER.info("Analysing IP1");
-        analyseIP1(problem);
+        analyseIP1(ip1Problem);
 
         LOGGER.info("Analysing IP2");
-        analyseIP2(problem);
+        IP2Problem ip2Problem = new IP2Problem(problem);
+        analyseIP2(ip2Problem);
 
         if (S.size() == problem.n()) {
             return S;
@@ -36,9 +37,7 @@ class BranchingOrderResolver {
         return S;
     }
 
-    private void analyseIP1(SATProblem problem) {
-        IP1Problem ip1Problem = new IP1Problem(problem);
-
+    private void analyseIP1(IP1Problem ip1Problem) {
         LOGGER.info("Computing e for IP1");
         int[][] e = ip1Problem.e();
 
@@ -71,9 +70,7 @@ class BranchingOrderResolver {
         } while (wMax != 0);
     }
 
-    private void analyseIP2(SATProblem problem) {
-        IP2Problem ip2Problem = new IP2Problem(problem);
-
+    private void analyseIP2(IP2Problem ip2Problem) {
         LOGGER.info("Computing e for IP2");
         int[][][] e = ip2Problem.e();
 

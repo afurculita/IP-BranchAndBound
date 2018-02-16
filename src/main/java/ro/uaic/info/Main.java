@@ -1,5 +1,6 @@
 package ro.uaic.info;
 
+import org.apache.log4j.BasicConfigurator;
 import org.sat4j.reader.ParseFormatException;
 import ro.uaic.info.TUBasedBranchAndBound.Solver;
 
@@ -8,22 +9,17 @@ import java.io.PrintWriter;
 
 public class Main {
     public static void main(String[] args) throws IOException, ParseFormatException {
+        BasicConfigurator.configure();
         DimacsReader reader = new DimacsReader(new Solver());
 
         // String filename = args[0];
-        String filename = "datasets/UF75.325.100/uf75-01.cnf";
+        String filename = "datasets/flat30-60/flat30-1.cnf";
 
         SATProblem problem = reader.parseInstance(filename);
-        if (!problem.isSatisfiable()) {
+        if (problem.isSatisfiable()) {
+            System.out.println(" Satisfiable !");
+        } else {
             System.out.println(" Unsatisfiable !");
-            return;
         }
-
-        PrintWriter out = new PrintWriter(System.out, true);
-
-        reader.decode(problem.model(), out);
-
-        out.flush();
-        out.close();
     }
 }

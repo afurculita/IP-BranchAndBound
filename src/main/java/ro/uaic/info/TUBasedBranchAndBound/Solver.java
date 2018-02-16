@@ -2,18 +2,19 @@ package ro.uaic.info.TUBasedBranchAndBound;
 
 import ro.uaic.info.SATProblem;
 
-import java.util.List;
+import java.util.*;
 
 public class Solver {
-    private SATProblem SATProblem;
+    private List<Integer> branchingOrder;
+    private IP1Problem ip1Problem;
 
     public boolean solve(SATProblem problem) {
-        this.SATProblem = problem;
+        ip1Problem = new IP1Problem(problem);
 
-        // Step 1. Obtain the branching order S
-        List<Integer> branchingOrder = new BranchingOrderResolver().resolve(problem);
+        // Obtain the branching order S
+        branchingOrder = new BranchingOrderResolver().resolve(problem, ip1Problem);
 
-        // Step 2. The width-first search strategy is used
+        // The width-first search strategy is used
         // within the framework of the branch-and-bound
         // method to solve (IP1) or (IP2) according to the
         // branching rule S. At any branch node with an
@@ -21,15 +22,94 @@ public class Solver {
         // value is zero, the algorithm terminates and the SAT
         // problem is satisfiable; Otherwise, continue.
 
-        // Step 3. If no active node exists, the algorithm
+        // If no active node exists, the algorithm
         // terminates and the SAT problem is unsatisfiable;
         // Otherwise, continue.
 
-        // Step 4. Apply the branch-and-bound method with
+        // Apply the branch-and-bound method with
         // an arbitrary branching order to the remaining
         // variables un-ranked in S.
 
-        return true;
+        Node result = branchAndBound();
+
+        return result.bound == 0.0;
     }
 
+    private Node branchAndBound() {
+        Node best = new Node();
+
+        Node root = new Node();
+        root.computeBound();
+
+        if (root.bound == 0.0) {
+            best = root;
+
+            return best;
+        }
+
+        PriorityQueue<Node> q = new PriorityQueue<>();
+        q.offer(root);
+
+        while (!q.isEmpty()) {
+            Node node = q.poll();
+
+            if (branchingOrder.size() < node.h + 1) {
+                break;
+            }
+
+            int orderKey = branchingOrder.get(node.h);
+
+            Node zero = new Node(node);
+            zero.taken.put(orderKey, 0);
+
+            zero.computeBound();
+
+            if (zero.bound > best.bound) {
+                q.offer(zero);
+            } else {
+                best = zero;
+
+                if (best.bound == 0.0) break;
+            }
+
+            Node one = new Node(node);
+            zero.taken.put(orderKey, 1);
+
+            one.computeBound();
+
+            if (one.bound > best.bound) {
+                q.offer(one);
+            } else {
+                best = one;
+
+                if (best.bound == 0.0) break;
+            }
+        }
+
+        return best;
+    }
+
+    private class Node implements Comparable<Node> {
+        int h = 0;
+        Map<Integer, Integer> taken;
+        double bound;
+
+        Node() {
+            taken = new HashMap<>();
+        }
+
+        Node(Node parent) {
+            h = parent.h + 1;
+            taken = new HashMap<>(parent.taken);
+            bound = parent.bound;
+        }
+
+        public int compareTo(Node other) {
+            return (int) (bound - other.bound);
+        }
+
+        void computeBound() {
+            bound = ip1Problem.solveWith(taken);
+        }
+    }
 }
