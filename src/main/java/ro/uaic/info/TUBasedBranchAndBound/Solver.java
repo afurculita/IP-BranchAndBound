@@ -2,9 +2,12 @@ package ro.uaic.info.TUBasedBranchAndBound;
 
 import ro.uaic.info.SATProblem;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.*;
 
 public class Solver {
+    private static final int RELAXED_OPTIMIZATION_SCALE = 4;
     private List<Integer> branchingOrder;
     private IP1Problem ip1Problem;
     private SATProblem problem;
@@ -34,14 +37,14 @@ public class Solver {
 
         Node result = branchAndBound();
 
-        return result.bound == 0.0;
+        return isBoundZero(result);
     }
 
     private Node branchAndBound() {
         Node root = new Node();
         root.computeBound();
 
-        if (root.bound == 0.0) {
+        if (isBoundZero(root)) {
             return root;
         }
 
@@ -73,7 +76,7 @@ public class Solver {
             } else {
                 best = zero;
 
-                if (best.bound == 0.0) break;
+                if (isBoundZero(best)) break;
             }
 
             Node one = new Node(node);
@@ -86,11 +89,17 @@ public class Solver {
             } else {
                 best = one;
 
-                if (best.bound == 0.0) break;
+                if (isBoundZero(best)) break;
             }
         }
 
         return best;
+    }
+
+    private boolean isBoundZero(Node best) {
+        BigDecimal bd = new BigDecimal(best.bound).setScale(RELAXED_OPTIMIZATION_SCALE, RoundingMode.HALF_EVEN);
+
+        return bd.stripTrailingZeros().equals(BigDecimal.ZERO);
     }
 
     private class Node implements Comparable<Node> {
