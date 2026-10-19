@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Diagnostics go to stderr so that the DIMACS-style result on stdout stays machine-readable.
+     Override the level with -Dlog.level=debug (or trace) on the command line. -->
+<Configuration status="WARN">
+    <Properties>
+        <Property name="log.level">info</Property>
+    </Properties>
+    <Appenders>
+        <Console name="stderr" target="SYSTEM_ERR">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} %-5level %c{1} - %msg%n"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Root level="${sys:log.level}">
+            <AppenderRef ref="stderr"/>
+        </Root>
+    </Loggers>
+</Configuration>

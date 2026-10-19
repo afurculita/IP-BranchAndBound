@@ -1,0 +1,12 @@
+c Comments before the problem line
+c
+p cnf 5 4
+c a comment between clauses
+1 -2
+3 0
+-1 2 0 4 5 0
+c the last clause has no terminating zero on its own line
+-3 -4 -5 0
+%
+0
+this trailer is ignored
