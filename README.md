@@ -214,39 +214,48 @@ configurations (`-Dbenchmark.instances=N` to change how many; the default is 5).
 Averages over 20 instances per family from a single run in a cloud container (JDK 21, 4 cores, no JVM
 warm-up). uf75 and flat30 are the SATLIB families in `datasets/` (all satisfiable); uf50 are 20 generated
 uniform random 3-SAT instances with 50 variables and 218 clauses (11 satisfiable, 9 unsatisfiable). All
-seven configurations returned the same answer on every instance.
+eleven configurations returned the same answer on every instance. Entries are *nodes explored / seconds*.
 
-| Configuration | uf75 (75×325) nodes / s | flat30 (90×300) nodes / s | uf50 sat nodes / s | uf50 unsat nodes / s |
+| Configuration | uf75 (75×325) | flat30 (90×300) | uf50 sat | uf50 unsat |
 |---|---:|---:|---:|---:|
-| `--paper` (BFS, static, no propagation) | 1169 / 9.51 | 914 / 0.66 | 192 / 0.57 | 231 / 0.62 |
-| default (BFS, static, propagation) | 977 / 3.34 | 56 / 0.17 | 153 / 0.30 | 221 / 0.36 |
-| `--dfs` | 894 / 1.33 | 44 / 0.10 | 88 / 0.22 | 221 / 0.31 |
-| `--dfs --dynamic` | 685 / 1.46 | 81 / 0.21 | 122 / 0.29 | 238 / 0.43 |
-| `--dynamic` (BFS) | 940 / 3.53 | 38 / 0.22 | 153 / 0.44 | 238 / 0.51 |
-| `--threads 4` (BFS) | 893 / 1.63 | 37 / 0.25 | 141 / 0.32 | 221 / 0.37 |
-| `--dfs --threads 4` | 622 / 0.87 | 35 / 0.23 | 98 / 0.29 | 221 / 0.35 |
+| `--paper --lp tableau` (BFS, static, no propagation; dense tableau) | 1169 / 9.09 | 914 / 0.61 | 192 / 0.50 | 231 / 0.59 |
+| `--paper` (same, revised dual simplex) | 1129 / 3.90 | 914 / 0.49 | 178 / 0.43 | 231 / 0.50 |
+| `--no-learning` (BFS, static, propagation) | 974 / 1.64 | 54 / 0.14 | 151 / 0.28 | 221 / 0.30 |
+| default (BFS, static, propagation, learning) | 563 / 1.19 | 53 / 0.15 | 125 / 0.26 | 155 / 0.28 |
+| `--dfs --no-learning` | 894 / 0.87 | 44 / 0.09 | 88 / 0.19 | 221 / 0.22 |
+| `--dfs` | 248 / 0.51 | 24 / 0.08 | 59 / 0.17 | 111 / 0.23 |
+| `--dfs --rule dynamic` | 213 / 0.58 | 35 / 0.17 | 61 / 0.21 | 104 / 0.25 |
+| `--dfs --rule jw` | **126 / 0.45** | **20 / 0.09** | **35 / 0.18** | **66 / 0.20** |
+| `--threads 4` (BFS) | 460 / 0.91 | 28 / 0.21 | 79 / 0.36 | 143 / 0.38 |
+| `--dfs --threads 4` | 311 / 0.63 | 34 / 0.19 | 74 / 0.30 | 120 / 0.29 |
+| `--dfs --rule jw --threads 4` | 136 / 0.56 | 33 / 0.22 | 46 / 0.27 | 68 / 0.33 |
 
 For reference, `--paper --lp simplex` (the Commons Math simplex rebuilt at every node) takes 43 s on
-uf75-01 for the same 1069 nodes that the dual simplex solves in 10 s. The paper reports 704 nodes on
-average (minimum 8, maximum 6502) for the 75×325 family with CPLEX; the node counts of `--paper` are of the
-same order.
+uf75-01 for the 1069 nodes that the tableau dual simplex solves in 10 s and the revised one in 4.5 s. The
+paper reports 704 nodes on average (minimum 8, maximum 6502) for the 75×325 family with CPLEX; the node
+counts of `--paper` are of the same order (they vary slightly between LP back-ends because degenerate
+relaxations have several optimal vertices).
 
 What the numbers say:
 
-* **The dual simplex** cuts the per-node cost by about 4× against the rebuilt Commons Math LP, with
-  identical node counts (the relaxation is the same LP).
-* **Propagation** is the largest single win: 3× on uf75 and 16× on flat30 for BFS, because most infeasible
-  nodes are now detected by unit propagation instead of an LP, and the remaining relaxations are smaller.
-* **Depth-first search** reaches a model sooner on satisfiable instances (uf75: 2.5× faster than BFS) and
-  costs nothing on unsatisfiable ones, where the whole tree is explored either way.
-* **Dynamic ranking** reduces the node count on uf75 (685 vs 894 with DFS) but the per-node ranking cost
-  eats the gain, and on the smaller families it explores *more* nodes. It is exact and available, but off
-  by default.
-* **Threads** help where the tree is large (uf75: 1.5–2× with 4 workers); on the small instances the
-  scheduling overhead dominates. With a shared deque, parallel DFS loses some of its "finish one subtree
-  first" behaviour, so it explores a different set of nodes than single-threaded DFS.
+* **Revised vs tableau dual simplex**: 2.3× faster per node on uf75 (same LP, hence the same decisions up
+  to degeneracy), and `O(m²)` memory instead of `O(m(n + 2m))`.
+* **Propagation** remains the largest single win against the paper (BFS: 2.4× on uf75, 3.5× on flat30).
+* **Learning** cuts the tree substantially once propagation is on: on uf75 from 894 to 248 nodes with DFS
+  and from 974 to 563 with BFS, and on the unsatisfiable uf50 instances from 221 to 111 nodes, for a
+  1.3–1.7× time gain. Learnt clauses only cost propagation time, never an LP.
+* **Branching rules**: the per-node non-TU ranking (`dynamic`) explores somewhat fewer nodes than the static
+  order on random 3-SAT (213 vs 248 on uf75) but pays for the per-node degree computation; the classic
+  Jeroslow–Wang rule is the clear winner on every family, with 2–3× fewer nodes than the static order. On
+  these instances the TU-based ranking is a useful *static* order but not a better *dynamic* one.
+* **Threads**: with learning and propagation the trees are now small enough (a few hundred nodes, under a
+  second) that four workers mostly add scheduling overhead; the only gain is BFS on uf75 (1.3×). Work
+  stealing keeps parallel DFS close to single-threaded DFS in node count (311 vs 248 on uf75, against 622 vs
+  894 before, when the workers shared one deque).
 
-Rerun the matrix with the executable jar, e.g. `java -jar target/IP-BranchAndBound-*-all.jar --dfs --threads 4 datasets/UF75.325.100`.
+The fastest configuration on all four families is `--dfs --rule jw`, about 20× faster than `--paper` on
+uf75 and 45× faster than the previous release's default. Rerun the matrix with the executable jar, e.g.
+`java -jar target/IP-BranchAndBound-*-all.jar --dfs --rule jw datasets/UF75.325.100`.
 
 ## Design notes
 
