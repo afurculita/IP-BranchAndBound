@@ -200,20 +200,42 @@ configurations (`-Dbenchmark.instances=N` to change how many; the default is 5).
 
 ## Benchmarks
 
-Indicative numbers from a single run in a cloud container (JDK 21, no warm-up), for comparison with
-Table I of the paper, which reports 704 nodes on average (minimum 8, maximum 6502) for the 75×325 family:
+Averages over 20 instances per family from a single run in a cloud container (JDK 21, 4 cores, no JVM
+warm-up). uf75 and flat30 are the SATLIB families in `datasets/` (all satisfiable); uf50 are 20 generated
+uniform random 3-SAT instances with 50 variables and 218 clauses (11 satisfiable, 9 unsatisfiable). All
+seven configurations returned the same answer on every instance.
 
-| Instance | Search | Nodes | LP solves | Time |
-|---|---|---:|---:|---:|
-| `quinn.cnf` (16×18) | BFS | 5 | 5 | 0.05 s |
-| `uf75-01.cnf` (75×325) | BFS (paper) | 1069 | 1066 | 44 s |
-| `uf75-01.cnf` (75×325) | DFS | 289 | 289 | 14 s |
-| `flat30-1.cnf` (90×300) | BFS (paper) | 23 | 19 | 2.7 s |
-| `flat30-1.cnf` (90×300) | DFS | 13 | 12 | 2.1 s |
+| Configuration | uf75 (75×325) nodes / s | flat30 (90×300) nodes / s | uf50 sat nodes / s | uf50 unsat nodes / s |
+|---|---:|---:|---:|---:|
+| `--paper` (BFS, static, no propagation) | 1169 / 9.51 | 914 / 0.66 | 192 / 0.57 | 231 / 0.62 |
+| default (BFS, static, propagation) | 977 / 3.34 | 56 / 0.17 | 153 / 0.30 | 221 / 0.36 |
+| `--dfs` | 894 / 1.33 | 44 / 0.10 | 88 / 0.22 | 221 / 0.31 |
+| `--dfs --dynamic` | 685 / 1.46 | 81 / 0.21 | 122 / 0.29 | 238 / 0.43 |
+| `--dynamic` (BFS) | 940 / 3.53 | 38 / 0.22 | 153 / 0.44 | 238 / 0.51 |
+| `--threads 4` (BFS) | 893 / 1.63 | 37 / 0.25 | 141 / 0.32 | 221 / 0.37 |
+| `--dfs --threads 4` | 622 / 0.87 | 35 / 0.23 | 98 / 0.29 | 221 / 0.35 |
 
-Nearly all the time is spent in the dense simplex solver (about 40 ms per relaxation on uf75); the node
-counts are in line with the paper. Depth-first search finds a model much sooner on satisfiable instances,
-which is why the slow test-suite uses it.
+For reference, `--paper --lp simplex` (the Commons Math simplex rebuilt at every node) takes 43 s on
+uf75-01 for the same 1069 nodes that the dual simplex solves in 10 s. The paper reports 704 nodes on
+average (minimum 8, maximum 6502) for the 75×325 family with CPLEX; the node counts of `--paper` are of the
+same order.
+
+What the numbers say:
+
+* **The dual simplex** cuts the per-node cost by about 4× against the rebuilt Commons Math LP, with
+  identical node counts (the relaxation is the same LP).
+* **Propagation** is the largest single win: 3× on uf75 and 16× on flat30 for BFS, because most infeasible
+  nodes are now detected by unit propagation instead of an LP, and the remaining relaxations are smaller.
+* **Depth-first search** reaches a model sooner on satisfiable instances (uf75: 2.5× faster than BFS) and
+  costs nothing on unsatisfiable ones, where the whole tree is explored either way.
+* **Dynamic ranking** reduces the node count on uf75 (685 vs 894 with DFS) but the per-node ranking cost
+  eats the gain, and on the smaller families it explores *more* nodes. It is exact and available, but off
+  by default.
+* **Threads** help where the tree is large (uf75: 1.5–2× with 4 workers); on the small instances the
+  scheduling overhead dominates. With a shared deque, parallel DFS loses some of its "finish one subtree
+  first" behaviour, so it explores a different set of nodes than single-threaded DFS.
+
+Rerun the matrix with the executable jar, e.g. `java -jar target/IP-BranchAndBound-*-all.jar --dfs --threads 4 datasets/UF75.325.100`.
 
 ## Design notes
 
