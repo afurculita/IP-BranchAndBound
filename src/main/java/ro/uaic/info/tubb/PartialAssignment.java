@@ -22,6 +22,28 @@ public final class PartialAssignment {
         this.numFixed = numFixed;
     }
 
+    /**
+     * Builds an assignment from raw values: {@code -1} free, {@code 0} false, {@code 1} true.
+     * The array is copied.
+     */
+    static PartialAssignment fromValues(byte[] rawValues) {
+        int fixed = 0;
+        for (byte v : rawValues) {
+            if (v != FREE && v != FALSE && v != TRUE) {
+                throw new IllegalArgumentException("invalid value " + v);
+            }
+            if (v != FREE) {
+                fixed++;
+            }
+        }
+        return new PartialAssignment(rawValues.clone(), fixed);
+    }
+
+    /** Raw values: {@code -1} free, {@code 0} false, {@code 1} true (a copy). */
+    byte[] rawValues() {
+        return values.clone();
+    }
+
     /** All variables free. */
     public static PartialAssignment empty(int numVariables) {
         byte[] values = new byte[numVariables];

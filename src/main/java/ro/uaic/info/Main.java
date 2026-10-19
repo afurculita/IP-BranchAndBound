@@ -12,8 +12,10 @@ import java.util.stream.Stream;
 import ro.uaic.info.cnf.CnfFormula;
 import ro.uaic.info.cnf.DimacsFormatException;
 import ro.uaic.info.cnf.DimacsReader;
+import ro.uaic.info.tubb.RelaxationSolverFactory;
 import ro.uaic.info.tubb.SatResult;
 import ro.uaic.info.tubb.TuBranchAndBoundSolver;
+import ro.uaic.info.tubb.TuBranchAndBoundSolver.BranchingRule;
 import ro.uaic.info.tubb.TuBranchAndBoundSolver.Options;
 import ro.uaic.info.tubb.TuBranchAndBoundSolver.SearchStrategy;
 
@@ -22,11 +24,16 @@ import ro.uaic.info.tubb.TuBranchAndBoundSolver.SearchStrategy;
  *
  * <pre>
  * usage: java -jar IP-BranchAndBound-all.jar [options] FILE_OR_DIR...
- *   --bfs            width-first search (default, as in the paper)
- *   --dfs            depth-first search
- *   --max-nodes N    give up after N nodes (answer UNKNOWN)
- *   --no-model       do not print the satisfying assignment
- *   -h, --help       this message
+ *   --bfs              width-first search (default, as in the paper)
+ *   --dfs              depth-first search
+ *   --dynamic          re-rank the variables of the reduced problem at every node
+ *   --no-propagation   disable unit propagation and pure-literal elimination
+ *   --lp dual|simplex  warm-started dual simplex (default) or rebuilt Commons Math simplex
+ *   --threads N        number of worker threads (default 1)
+ *   --paper            the method exactly as published: --bfs, no propagation, static order, 1 thread
+ *   --max-nodes N      give up after N nodes (answer UNKNOWN)
+ *   --no-model         do not print the satisfying assignment
+ *   -h, --help         this message
  * </pre>
  * Output follows the SAT competition conventions: {@code c} comment lines, one {@code s SATISFIABLE},
  * {@code s UNSATISFIABLE} or {@code s UNKNOWN} line per instance and {@code v} lines with the model.
@@ -62,7 +69,36 @@ public final class Main {
                 }
                 case "--bfs" -> options = options.withStrategy(SearchStrategy.BREADTH_FIRST);
                 case "--dfs" -> options = options.withStrategy(SearchStrategy.DEPTH_FIRST);
+                case "--dynamic" -> options = options.withBranchingRule(BranchingRule.DYNAMIC);
+                case "--no-propagation" -> options = options.withPropagation(false);
+                case "--paper" -> options = Options.paper();
                 case "--no-model" -> printModel = false;
+                case "--lp" -> {
+                    if (i + 1 >= args.length) {
+                        err.println("error: --lp requires a value (dual or simplex)");
+                        return EXIT_ERROR;
+                    }
+                    switch (args[++i]) {
+                        case "dual" -> options = options.withRelaxationSolvers(RelaxationSolverFactory.dualSimplex());
+                        case "simplex" -> options = options.withRelaxationSolvers(RelaxationSolverFactory.commonsMathSimplex());
+                        default -> {
+                            err.println("error: unknown LP solver '" + args[i] + "' (expected dual or simplex)");
+                            return EXIT_ERROR;
+                        }
+                    }
+                }
+                case "--threads" -> {
+                    if (i + 1 >= args.length) {
+                        err.println("error: --threads requires a value");
+                        return EXIT_ERROR;
+                    }
+                    try {
+                        options = options.withThreads(Integer.parseInt(args[++i]));
+                    } catch (IllegalArgumentException e) {
+                        err.println("error: invalid --threads value '" + args[i] + "'");
+                        return EXIT_ERROR;
+                    }
+                }
                 case "--max-nodes" -> {
                     if (i + 1 >= args.length) {
                         err.println("error: --max-nodes requires a value");
@@ -128,6 +164,7 @@ public final class Main {
                 result.branchingOrder().unranked().size());
         out.printf(Locale.ROOT, "c nodes: %d explored, %d relaxations solved, %d falsified, %d pruned, max active %d%n",
                 st.nodesExplored(), st.lpSolved(), st.nodesFalsified(), st.nodesPruned(), st.maxQueueSize());
+        out.printf(Locale.ROOT, "c propagation: %d variables fixed%n", st.propagatedVariables());
         out.printf(Locale.ROOT, "c time: %.3f s%n", st.elapsed().toNanos() / 1e9);
         switch (result.status()) {
             case SATISFIABLE -> {
@@ -173,10 +210,15 @@ public final class Main {
 
     private static void usage(PrintStream out) {
         out.println("usage: java -jar IP-BranchAndBound-all.jar [options] FILE_OR_DIR...");
-        out.println("  --bfs            width-first search (default, as in the paper)");
-        out.println("  --dfs            depth-first search");
-        out.println("  --max-nodes N    give up after N nodes (answer UNKNOWN)");
-        out.println("  --no-model       do not print the satisfying assignment");
-        out.println("  -h, --help       this message");
+        out.println("  --bfs              width-first search (default, as in the paper)");
+        out.println("  --dfs              depth-first search");
+        out.println("  --dynamic          re-rank the variables of the reduced problem at every node");
+        out.println("  --no-propagation   disable unit propagation and pure-literal elimination");
+        out.println("  --lp dual|simplex  warm-started dual simplex (default) or rebuilt Commons Math simplex");
+        out.println("  --threads N        number of worker threads (default 1)");
+        out.println("  --paper            the method exactly as published: --bfs, no propagation, static order, 1 thread");
+        out.println("  --max-nodes N      give up after N nodes (answer UNKNOWN)");
+        out.println("  --no-model         do not print the satisfying assignment");
+        out.println("  -h, --help         this message");
     }
 }

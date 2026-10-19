@@ -1,29 +1,24 @@
 package ro.uaic.info.tubb;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import ro.uaic.info.cnf.Clause;
 import ro.uaic.info.cnf.CnfFormula;
 import ro.uaic.info.cnf.Literal;
-import ro.uaic.info.lp.LinearProgram;
-import ro.uaic.info.lp.LinearProgramSolver;
 import ro.uaic.info.lp.LpSolution;
 
 /**
- * Builds and solves the linear relaxation of (IP1) at a node of the branch-and-bound tree, i.e. for the
- * sub-problem obtained by fixing some variables.
+ * Evaluates a node of the branch-and-bound tree through the linear relaxation of (IP1).
  *
  * <p>With the variables of a {@link PartialAssignment} substituted, every clause falls in one of three cases:
  * <ul>
- *   <li>a fixed literal is true: the clause is satisfied, its row is dropped;</li>
- *   <li>all literals are fixed and false: the clause is falsified, {@code s_i = 1} is forced and the
+ *   <li>a fixed literal is true: the clause is satisfied and drops out;</li>
+ *   <li>all literals are fixed and false: the clause is falsified, {@code sᵢ = 1} is forced and the
  *       sub-problem has optimal value at least 1, hence contains no satisfying assignment;</li>
- *   <li>otherwise the row {@code Σ_{free x_j ∈ C} x_j − Σ_{free ¬x_j ∈ C} x_j + s_i ≥ 1 − b'_i} is kept, where
- *       {@code b'_i} is the number of free complement literals.</li>
+ *   <li>otherwise the row stays in the relaxation.</li>
  * </ul>
- * The relaxation {@code min 1ᵀs, 0 ≤ x ≤ 1, s ≥ 0} is then solved by the configured
- * {@link LinearProgramSolver}. The bound {@code s ≤ 1} is implied by {@code 0 ≤ x ≤ 1} and is omitted.
+ * The relaxation itself is solved by a {@link RelaxationSolver}; this class classifies its outcome
+ * ({@link Status}) and turns an integral zero-valued solution into a verified satisfying assignment.
+ *
+ * <p>Instances are as thread-safe as their {@link RelaxationSolver}; the search creates one per worker.
  */
 public final class Ip1Relaxation {
 
@@ -46,8 +41,9 @@ public final class Ip1Relaxation {
      * @param value      the LP optimal value ({@code 1} for {@link Status#FALSIFIED}, by convention)
      * @param assignment the satisfying assignment when {@link Status#INTEGRAL}, otherwise {@code null}
      * @param numRows    number of active (unsatisfied) clauses in the relaxation
+     * @param lpSolved   whether an LP was actually solved
      */
-    public record Result(Status status, double value, boolean[] assignment, int numRows) {
+    public record Result(Status status, double value, boolean[] assignment, int numRows, boolean lpSolved) {
         public Result {
             assignment = assignment == null ? null : assignment.clone();
         }
@@ -59,32 +55,22 @@ public final class Ip1Relaxation {
     }
 
     private final CnfFormula formula;
-    private final LinearProgramSolver solver;
+    private final RelaxationSolver solver;
     private final double tolerance;
 
     /**
      * @param formula   the formula
-     * @param solver    the LP solver; it must return vertex solutions (see {@link LinearProgramSolver})
+     * @param solver    the relaxation solver; it must return vertex solutions
      * @param tolerance values within this distance of zero (or of an integer) are considered zero (integral)
      */
-    public Ip1Relaxation(CnfFormula formula, LinearProgramSolver solver, double tolerance) {
+    public Ip1Relaxation(CnfFormula formula, RelaxationSolver solver, double tolerance) {
         this.formula = formula;
         this.solver = solver;
         this.tolerance = tolerance;
     }
 
     public Result solve(PartialAssignment fixed) {
-        int n = formula.numVariables();
-
-        // Column of each free variable in the LP, or -1 when fixed.
-        int[] column = new int[n];
-        int numFree = 0;
-        for (int v = 0; v < n; v++) {
-            column[v] = fixed.isFree(v) ? numFree++ : -1;
-        }
-
-        // Keep the clauses that are not yet satisfied; detect falsified ones.
-        List<Clause> active = new ArrayList<>();
+        int rows = 0;
         for (Clause clause : formula.clauses()) {
             boolean satisfied = false;
             boolean hasFree = false;
@@ -100,70 +86,36 @@ public final class Ip1Relaxation {
                 continue;
             }
             if (!hasFree) {
-                return new Result(Status.FALSIFIED, 1, null, 0);
+                return new Result(Status.FALSIFIED, 1, null, 0, false);
             }
-            active.add(clause);
+            rows++;
         }
-
-        if (active.isEmpty()) {
+        if (rows == 0) {
             // Every clause is already satisfied; any completion works.
-            return new Result(Status.INTEGRAL, 0, fixed.complete(new boolean[numFree]), 0);
+            return new Result(Status.INTEGRAL, 0, fixed.complete(new boolean[fixed.numFree()]), 0, false);
         }
 
-        LpSolution solution = solver.minimize(buildProgram(active, column, numFree));
-        int rows = active.size();
+        LpSolution solution = solver.solve(fixed);
         if (solution.value() > tolerance) {
-            return new Result(Status.POSITIVE, solution.value(), null, rows);
+            return new Result(Status.POSITIVE, solution.value(), null, rows, true);
         }
 
-        double[] point = solution.point();
-        boolean[] freeValues = new boolean[numFree];
-        for (int j = 0; j < numFree; j++) {
-            double x = point[j];
-            if (Math.abs(x - Math.rint(x)) > tolerance) {
-                return new Result(Status.FRACTIONAL, solution.value(), null, rows);
+        double[] x = solution.point();
+        boolean[] assignment = new boolean[formula.numVariables()];
+        for (int j = 0; j < x.length; j++) {
+            if (!fixed.isFree(j)) {
+                assignment[j] = fixed.value(j);
+                continue;
             }
-            freeValues[j] = Math.rint(x) == 1;
+            if (Math.abs(x[j] - Math.rint(x[j])) > tolerance) {
+                return new Result(Status.FRACTIONAL, solution.value(), null, rows, true);
+            }
+            assignment[j] = Math.rint(x[j]) == 1;
         }
-        boolean[] assignment = fixed.complete(freeValues);
         if (!formula.isSatisfiedBy(assignment)) {
             // Should not happen with a sound LP solve; treat it as fractional and keep branching.
-            return new Result(Status.FRACTIONAL, solution.value(), null, rows);
+            return new Result(Status.FRACTIONAL, solution.value(), null, rows, true);
         }
-        return new Result(Status.INTEGRAL, solution.value(), assignment, rows);
-    }
-
-    /**
-     * Variables of the LP: the {@code numFree} free {@code x_j} (columns {@code 0 .. numFree−1}) followed by
-     * one slack {@code s_i} per active clause.
-     */
-    private static LinearProgram buildProgram(List<Clause> active, int[] column, int numFree) {
-        int rows = active.size();
-        int vars = numFree + rows;
-
-        double[] cost = new double[vars];
-        for (int i = 0; i < rows; i++) {
-            cost[numFree + i] = 1;
-        }
-        LinearProgram lp = new LinearProgram(cost);
-        for (int j = 0; j < numFree; j++) {
-            lp.upperBound(j, 1);
-        }
-        for (int i = 0; i < rows; i++) {
-            double[] row = new double[vars];
-            int negatedFree = 0;
-            for (Literal lit : active.get(i).literals()) {
-                int c = column[lit.index()];
-                if (c >= 0) {
-                    row[c] = lit.sign();
-                    if (lit.negated()) {
-                        negatedFree++;
-                    }
-                }
-            }
-            row[numFree + i] = 1;
-            lp.addConstraint(row, LinearProgram.Relation.GEQ, 1 - negatedFree);
-        }
-        return lp;
+        return new Result(Status.INTEGRAL, solution.value(), assignment, rows, true);
     }
 }

@@ -67,7 +67,29 @@ class MainTest {
     }
 
     @Test
+    void extensionFlagsAreAccepted() {
+        int exit = Main.run(new String[] {"--dfs", "--dynamic", "--threads", "2", "--lp", "dual", "--no-model",
+                "src/test/resources/cnf/paper-example.cnf"}, out, err);
+        assertEquals(Main.EXIT_SATISFIABLE, exit, err());
+        assertTrue(out().contains("c propagation:"), out());
+
+        outBytes.reset();
+        exit = Main.run(new String[] {"--paper", "--lp", "simplex", "src/test/resources/cnf/php-3-2.cnf"}, out, err);
+        assertEquals(Main.EXIT_UNSATISFIABLE, exit, err());
+        assertTrue(out().contains("c propagation: 0 variables fixed"), out());
+
+        outBytes.reset();
+        exit = Main.run(new String[] {"--no-propagation", "datasets/quinn.cnf"}, out, err);
+        assertEquals(Main.EXIT_SATISFIABLE, exit, err());
+    }
+
+    @Test
     void usageErrors() {
+        assertEquals(Main.EXIT_ERROR, Main.run(new String[] {"--lp", "bogus", "x.cnf"}, out, err));
+        assertEquals(Main.EXIT_ERROR, Main.run(new String[] {"--lp"}, out, err));
+        assertEquals(Main.EXIT_ERROR, Main.run(new String[] {"--threads", "two", "x.cnf"}, out, err));
+        assertEquals(Main.EXIT_ERROR, Main.run(new String[] {"--threads", "0", "x.cnf"}, out, err));
+        assertEquals(Main.EXIT_ERROR, Main.run(new String[] {"--threads"}, out, err));
         assertEquals(Main.EXIT_ERROR, Main.run(new String[0], out, err));
         assertTrue(err().contains("usage"), err());
 

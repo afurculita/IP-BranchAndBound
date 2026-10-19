@@ -6,11 +6,11 @@ import java.util.Optional;
 /**
  * Outcome of a {@link TuBranchAndBoundSolver#solve} call.
  *
- * @param status        whether the formula is satisfiable, unsatisfiable or undecided (node limit reached)
- * @param model         a satisfying assignment when {@link Status#SATISFIABLE} ({@code model[i]} is the
- *                      value of variable {@code i + 1})
- * @param statistics    search statistics
- * @param branchingOrder the branching order that was used
+ * @param status         whether the formula is satisfiable, unsatisfiable or undecided (node limit reached)
+ * @param model          a satisfying assignment when {@link Status#SATISFIABLE} ({@code model[i]} is the
+ *                       value of variable {@code i + 1})
+ * @param statistics     search statistics
+ * @param branchingOrder the static branching order that was used (or used as fallback)
  */
 public record SatResult(Status status, Optional<boolean[]> model, Statistics statistics, BranchingOrder branchingOrder) {
 
@@ -19,15 +19,16 @@ public record SatResult(Status status, Optional<boolean[]> model, Statistics sta
     /**
      * Search statistics.
      *
-     * @param nodesExplored  nodes taken from the queue and evaluated
-     * @param lpSolved       nodes whose linear relaxation was actually solved
-     * @param nodesFalsified nodes pruned because a clause was falsified by the fixings
-     * @param nodesPruned    nodes pruned because their relaxation had a positive value
-     * @param maxQueueSize   largest number of active nodes held at once
-     * @param elapsed        wall-clock time of the whole solve, including the branching order
+     * @param nodesExplored       nodes taken from the queue and evaluated
+     * @param lpSolved            nodes whose linear relaxation was actually solved
+     * @param nodesFalsified      nodes found infeasible by propagation or a falsified clause, without an LP
+     * @param nodesPruned         nodes pruned because their relaxation had a positive value
+     * @param propagatedVariables variables fixed by unit propagation and pure-literal elimination
+     * @param maxQueueSize        largest number of active nodes held at once
+     * @param elapsed             wall-clock time of the whole solve, including the branching order
      */
     public record Statistics(long nodesExplored, long lpSolved, long nodesFalsified, long nodesPruned,
-                             int maxQueueSize, Duration elapsed) {
+                             long propagatedVariables, int maxQueueSize, Duration elapsed) {
     }
 
     public boolean isSatisfiable() {

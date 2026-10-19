@@ -12,6 +12,11 @@ ranked by how much *non-total-unimodular* structure they remove from the constra
 Fixing those variables first tends to leave a totally unimodular (TU) matrix, whose linear relaxation has
 integral vertices, so the search terminates after few nodes.
 
+On top of the published method this implementation adds, all optional: a warm-started dual simplex for the
+relaxations, unit propagation and pure-literal elimination at every node, dynamic re-ranking of the
+variables on the reduced problem, depth-first search and parallel node evaluation. `--paper` runs the
+method exactly as published.
+
 * [The method](#the-method)
 * [Building and running](#building-and-running)
 * [Using it as a library](#using-it-as-a-library)
@@ -98,11 +103,16 @@ java -jar target/IP-BranchAndBound-2.0.0-SNAPSHOT-all.jar datasets/quinn.cnf
 
 ```
 usage: java -jar IP-BranchAndBound-all.jar [options] FILE_OR_DIR...
-  --bfs            width-first search (default, as in the paper)
-  --dfs            depth-first search
-  --max-nodes N    give up after N nodes (answer UNKNOWN)
-  --no-model       do not print the satisfying assignment
-  -h, --help       this message
+  --bfs              width-first search (default, as in the paper)
+  --dfs              depth-first search
+  --dynamic          re-rank the variables of the reduced problem at every node
+  --no-propagation   disable unit propagation and pure-literal elimination
+  --lp dual|simplex  warm-started dual simplex (default) or rebuilt Commons Math simplex
+  --threads N        number of worker threads (default 1)
+  --paper            the method exactly as published: --bfs, no propagation, static order, 1 thread
+  --max-nodes N      give up after N nodes (answer UNKNOWN)
+  --no-model         do not print the satisfying assignment
+  -h, --help         this message
 ```
 
 Directories are searched recursively for `.cnf` files. The output follows the SAT-competition
@@ -111,8 +121,9 @@ conventions (`c` comments, one `s SATISFIABLE | UNSATISFIABLE | UNKNOWN` line, `
 ```
 c datasets/quinn.cnf: 16 variables, 18 clauses
 c branching order: 2 ranked by (IP1), 0 by (IP2), 14 unranked
-c nodes: 5 explored, 5 relaxations solved, 0 falsified, 2 pruned, max active 2
-c time: 0.047 s
+c nodes: 3 explored, 3 relaxations solved, 0 falsified, 0 pruned, max active 2
+c propagation: 12 variables fixed
+c time: 0.031 s
 s SATISFIABLE
 v 1 -2 3 -4 5 6 7 8 9 -10 -11 12 13 -14 -15 16 0
 ```
@@ -134,9 +145,12 @@ satisfiable).
 CnfFormula formula = new DimacsReader().read(Path.of("datasets/quinn.cnf"));
 
 TuBranchAndBoundSolver solver = new TuBranchAndBoundSolver(
-        TuBranchAndBoundSolver.Options.defaults()
-                .withStrategy(TuBranchAndBoundSolver.SearchStrategy.DEPTH_FIRST));
+        TuBranchAndBoundSolver.Options.defaults()                 // dual simplex, BFS, static order, propagation
+                .withStrategy(TuBranchAndBoundSolver.SearchStrategy.DEPTH_FIRST)
+                .withBranchingRule(TuBranchAndBoundSolver.BranchingRule.DYNAMIC)
+                .withThreads(4));
 SatResult result = solver.solve(formula);
+// TuBranchAndBoundSolver.Options.paper() is the method exactly as published.
 
 if (result.isSatisfiable()) {
     boolean[] model = result.model().orElseThrow();   // model[i] is the value of x_{i+1}
@@ -153,28 +167,36 @@ The pieces can be used on their own:
 | `tubb.Ip1Formulation` | the (IP1) matrix `A`, vector `b` and the pair degrees `eᵢⱼ` (Section III-A) |
 | `tubb.Ip2Formulation` | the (IP2) literal matrix of a reduced problem and the triple degrees `eᵢⱼₖ` (Section III-B) |
 | `tubb.BranchingOrder` | Procedure 1 |
-| `tubb.Ip1Relaxation` | the LP relaxation of (IP1) at a node with some variables fixed |
-| `tubb.TuBranchAndBoundSolver` | Algorithm 1 |
+| `tubb.Ip1Relaxation` | classifies a node from its relaxation: falsified, positive, fractional or integral |
+| `tubb.RelaxationSolver`, `tubb.DualSimplexRelaxationSolver` | the relaxation of (IP1) at a node; warm-started bounded dual simplex |
+| `tubb.RebuildingRelaxationSolver` | the same relaxation rebuilt at every node for a general `lp.LinearProgramSolver` |
+| `tubb.Propagation` | unit propagation, pure-literal elimination and the reduced formula of a node |
+| `tubb.TuBranchAndBoundSolver` | Algorithm 1, with the extensions as `Options` |
 | `lp.LinearProgramSolver`, `lp.SimplexLpSolver` | LP abstraction and its simplex implementation (Apache Commons Math) |
 
-Any LP solver that returns **vertex** solutions can be plugged in through `Options.withLpSolver`.
+Any LP solver that returns **vertex** solutions can be plugged in through `Options.withLpSolver`; a
+stateful, warm-started one through `Options.withRelaxationSolvers`.
 
 ## Tests
 
-`mvn verify` runs 156 unit tests (a few seconds):
+`mvn verify` runs 426 unit tests (about ten seconds):
 
 * parsers and the CNF model, including malformed inputs;
 * the (IP1) matrix of the paper's example, all 8 non-TU 2×2 and all 6 non-TU 3×3 patterns from
   Section III, and the equality of the triangle-based triple enumeration with brute force;
 * the greedy ranking and Procedure 1 on the paper's example;
-* the relaxation outcomes (falsified, positive, fractional, integral);
+* the relaxation outcomes (falsified, positive, fractional, integral) with both LP back-ends;
+* the dual simplex against the Commons Math simplex on hundreds of random nodes, including across tableau
+  refactorings, and the cost of warm starts;
+* propagation (unit chains, conflicts, pure literals, satisfiability preservation on random instances);
 * the solver on satisfiable and unsatisfiable formulas, and on **random 3-SAT at the phase transition
-  cross-checked against [SAT4J](https://www.sat4j.org/)** (test-scope dependency only), with both search
-  strategies;
+  cross-checked against [SAT4J](https://www.sat4j.org/)** (test-scope dependency only), for nine
+  configurations covering every option (paper, BFS/DFS, static/dynamic, propagation on/off, 1–3 threads,
+  both LP back-ends);
 * the command line.
 
-`mvn verify -Pslow` additionally runs the first instances of each SATLIB family against SAT4J
-(`-Dbenchmark.instances=N` to change how many; the default is 3).
+`mvn verify -Pslow` additionally runs the first instances of each SATLIB family against SAT4J in three
+configurations (`-Dbenchmark.instances=N` to change how many; the default is 5).
 
 ## Benchmarks
 
@@ -197,14 +219,39 @@ which is why the slow test-suite uses it.
 
 **LP solver.** The paper's argument is that a TU constraint matrix has integral *vertices*, so the LP must
 return a vertex: a simplex method. Interior-point methods converge to the analytic centre of the optimal
-face and almost never return an integral point even when one exists. The relaxation is therefore solved
-with the two-phase simplex of Apache Commons Math behind a small `LinearProgramSolver` interface.
+face and almost never return an integral point even when one exists. Two simplex back-ends are provided
+behind the `RelaxationSolver` interface.
 
-**Relaxation at a node.** Fixed variables are substituted: clauses satisfied by a fixed literal are
-dropped, a clause whose literals are all fixed false makes the node infeasible without solving an LP, and
-the remaining rows read `Σ_free ±xⱼ + sᵢ ≥ 1 − (#free complement literals)`. The bound `s ≤ 1` is implied by
-`0 ≤ x ≤ 1` and omitted. An integral zero-valued solution is verified against the formula before being
-reported.
+**Warm-started dual simplex** (`DualSimplexRelaxationSolver`, the default). All nodes share the same rows;
+they differ only in the bounds of the `x` variables (`[0,1]`, `{0}` or `{1}`), so the LP is kept in the
+equality form `A x + s − r = 1 − b` with one dense tableau per worker. Dual feasibility of a basis does not
+depend on the bounds, so the optimal basis of the previous node is dual feasible for the next one once
+every non-basic variable is placed at the bound matching the sign of its reduced cost; a few dual simplex
+pivots restore primal feasibility, instead of the hundreds a cold start needs. The all-slack basis is dual
+feasible too, so no phase one is ever required. The tableau is recomputed from the original data every
+500 pivots to contain round-off, and the solver restarts from the slack basis, then falls back to the
+Commons Math simplex, if it ever fails to converge. On uf75 this is 4× faster than rebuilding the LP at
+every node with the Commons Math simplex (`--lp simplex`), with identical node counts.
+
+**Propagation** (`Propagation`, on by default, `--no-propagation` to disable). After each branching decision
+unit propagation and pure-literal elimination are run to a fixed point. Both preserve satisfiability of the
+sub-problem, so the method stays exact; they detect most infeasible nodes without any LP and shrink the
+relaxations of the others. `--paper` disables it.
+
+**Dynamic ranking** (`--dynamic`). Procedure 1 is re-run on the reduced formula of the node (satisfied
+clauses removed, false literals dropped) and the top-ranked variable is branched on; when every non-TU
+degree is zero the static order is the fallback. It is exact but costs a degree computation per node, and
+in our measurements it does not beat the static order on random 3-SAT (see below), so it is off by default.
+
+**Parallel search** (`--threads N`). Workers share one deque of active nodes (FIFO for BFS, LIFO for DFS)
+and each owns a relaxation solver, so no LP state is shared. Termination is detected with an in-flight
+counter; the first worker to find an integral relaxation stops the others. With several workers the
+expansion order is only approximately breadth- or depth-first, so node counts vary between runs.
+
+**Relaxation at a node.** Clauses satisfied by a fixed literal drop out, a clause whose literals are all
+fixed false makes the node infeasible without an LP, and the remaining rows read
+`Σ_free ±xⱼ + sᵢ ≥ 1 − (#free complement literals)`. The bound `s ≤ 1` is implied by `0 ≤ x ≤ 1` and
+omitted. An integral zero-valued solution is verified against the formula before being reported.
 
 **Ranking details not fixed by the paper.** Ties in `argmax wᵢ` are broken towards the smallest index.
 When a variable is ranked, every coupling that involves it is zeroed (for (IP2) this covers both of its
@@ -237,23 +284,20 @@ is now a test-only oracle instead of a parser dependency, and a GitHub Actions w
 
 ## Limitations and possible improvements
 
-* **LP speed dominates.** Commons Math's simplex is dense and rebuilds the tableau at every node. A bounded
-  dual simplex with warm starts (the child LP differs from the parent only by a variable bound) would cut
-  the per-node cost by one or two orders of magnitude; wrapping a native solver such as HiGHS, GLOP
-  (OR-Tools) or CLP through `LinearProgramSolver` is a drop-in alternative.
-* **Logical propagation.** The paper fixes exactly one variable per level. Unit propagation and pure-literal
-  elimination after each fixing are cheap, keep the relaxation smaller and would remove many LP solves;
-  they do not change the method's structure.
-* **Dynamic ranking.** `S` is computed once on the full matrix. Recomputing the non-TU degrees on the
-  reduced matrix at each node (the paper's "recalculate `wᵢ`" taken literally) is more expensive but adapts
-  the order to the sub-problem.
-* **Search strategy.** Breadth-first search (the paper's choice) stores up to `2^depth` nodes. Depth-first
-  search uses linear memory and finds models sooner; best-first on the LP value is another option. Both
-  BFS and DFS are implemented.
+* **Sparse linear algebra.** The dual simplex uses a dense `m × (n + 2m)` tableau: fine up to a few hundred
+  clauses, quadratic in memory beyond. A revised simplex with an LU-factorised basis and sparse columns
+  (or a native solver such as HiGHS or CLP behind `RelaxationSolver`) is the next step for larger
+  instances.
+* **Parallel depth-first search.** Workers share one deque, which is simple but makes DFS lose its
+  "finish one subtree first" property; on satisfiable instances several workers often explore more nodes
+  than one. Work stealing with per-worker stacks, or splitting the tree at a fixed depth, would help.
+* **Branching heuristics.** Dynamic ranking recomputes Procedure 1 from scratch at every node; maintaining
+  the couplings incrementally would make it nearly free. Combining the non-TU degree with classic SAT
+  heuristics (e.g. the number of clauses a variable would satisfy) is unexplored.
 * **TU detection.** When the reduced matrix is recognised as TU (e.g. a network or interval matrix) the
   sub-problem is solved by a single LP, which could terminate branches early.
-* **Parallelism.** Sibling nodes are independent; the queue can be processed by a pool of workers with
-  one LP solver each.
+* **Learning.** The search forgets why a node was infeasible. Conflict analysis on falsified clauses (as in
+  CDCL solvers) could add learnt clauses that both prune the tree and tighten the relaxation.
 * **Scaling the degree computation.** The (IP2) triangle enumeration is exact and fast on 3-SAT, but on
   dense formulas with long clauses the number of triangles grows cubically; a sampled or bounded variant
   would be needed there.
