@@ -18,5 +18,9 @@ jobs:
       - name: Build and test
         run: mvn -B --no-transfer-progress verify
       - name: Smoke-test the executable jar
+        # The solver exits with 10 for a satisfiable instance (SAT competition convention), which
+        # `bash -e` would otherwise treat as a failure.
         run: |
-          java -jar target/IP-BranchAndBound-*-all.jar datasets/quinn.cnf; test $? -eq 10
+          set +e
+          java -jar target/IP-BranchAndBound-*-all.jar datasets/quinn.cnf
+          test $? -eq 10
