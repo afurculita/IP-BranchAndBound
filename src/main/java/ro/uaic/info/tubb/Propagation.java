@@ -19,7 +19,11 @@ import ro.uaic.info.cnf.Literal;
  *   <li><b>Pure literals</b>: a free variable occurring with a single polarity in the clauses not yet
  *       satisfied can be fixed to make those literals true.</li>
  * </ul>
- * This class also builds the {@linkplain #reduce reduced formula} of a sub-problem, used for dynamic
+ * Learnt clauses (see {@link ConflictAnalyzer}) take part in both rules. The propagation records a
+ * <em>trail</em>: the variables it fixed, in order, each with the clause that forced it ({@code null} for a
+ * pure-literal choice), which is what conflict analysis needs.
+ *
+ * <p>This class also builds the {@linkplain #reduce reduced formula} of a sub-problem, used for dynamic
  * variable ranking.
  */
 public final class Propagation {
@@ -27,26 +31,56 @@ public final class Propagation {
     /**
      * Result of propagating a partial assignment.
      *
-     * @param assignment the extended assignment, or {@code null} when a conflict was found
-     * @param fixedCount number of variables fixed by propagation
+     * @param assignment     the extended assignment (at the point of conflict when there is one)
+     * @param fixedCount     number of variables fixed by propagation
+     * @param conflict       the falsified clause, or {@code null} if there is no conflict
+     * @param trailVariables variables fixed by this propagation, in order
+     * @param trailReasons   for each trail entry the clause that forced it, or {@code null} for a pure literal
      */
-    public record Outcome(PartialAssignment assignment, int fixedCount) {
+    public record Outcome(PartialAssignment assignment, int fixedCount, Clause conflict,
+                          int[] trailVariables, Clause[] trailReasons) {
+        public Outcome {
+            trailVariables = trailVariables.clone();
+            trailReasons = trailReasons.clone();
+        }
+
         public boolean isConflict() {
-            return assignment == null;
+            return conflict != null;
+        }
+
+        @Override
+        public int[] trailVariables() {
+            return trailVariables.clone();
+        }
+
+        @Override
+        public Clause[] trailReasons() {
+            return trailReasons.clone();
         }
     }
+
+    private static final Clause[] NO_CLAUSES = new Clause[0];
 
     private Propagation() {
     }
 
+    /** {@link #propagate(CnfFormula, Clause[], PartialAssignment, boolean)} without learnt clauses. */
+    public static Outcome propagate(CnfFormula formula, PartialAssignment fixed, boolean pureLiterals) {
+        return propagate(formula, NO_CLAUSES, fixed, pureLiterals);
+    }
+
     /**
      * Extends {@code fixed} with every variable forced by unit propagation and (optionally) pure-literal
-     * elimination, to a fixed point.
+     * elimination, to a fixed point, over the formula's clauses and the given learnt clauses.
      */
-    public static Outcome propagate(CnfFormula formula, PartialAssignment fixed, boolean pureLiterals) {
+    public static Outcome propagate(CnfFormula formula, Clause[] learnt, PartialAssignment fixed, boolean pureLiterals) {
         byte[] v = fixed.rawValues();
         int n = v.length;
-        int fixedCount = 0;
+        List<Clause> clauses = formula.clauses();
+        int[] trailVars = new int[n];
+        Clause[] trailReasons = new Clause[n];
+        int trail = 0;
+
         boolean changed = true;
         while (changed) {
             changed = false;
@@ -54,7 +88,8 @@ public final class Propagation {
             boolean unitChanged = true;
             while (unitChanged) {
                 unitChanged = false;
-                for (Clause clause : formula.clauses()) {
+                for (int c = 0, total = clauses.size() + learnt.length; c < total; c++) {
+                    Clause clause = c < clauses.size() ? clauses.get(c) : learnt[c - clauses.size()];
                     Literal unit = null;
                     int free = 0;
                     boolean satisfied = false;
@@ -72,11 +107,13 @@ public final class Propagation {
                         continue;
                     }
                     if (free == 0) {
-                        return new Outcome(null, fixedCount);
+                        return new Outcome(PartialAssignment.fromValues(v), trail, clause,
+                                java.util.Arrays.copyOf(trailVars, trail), java.util.Arrays.copyOf(trailReasons, trail));
                     }
                     if (free == 1) {
                         v[unit.index()] = (byte) (unit.negated() ? 0 : 1);
-                        fixedCount++;
+                        trailVars[trail] = unit.index();
+                        trailReasons[trail++] = clause;
                         unitChanged = true;
                         changed = true;
                     }
@@ -88,7 +125,8 @@ public final class Propagation {
             // pure literals over the clauses that are still unsatisfied
             boolean[] positive = new boolean[n];
             boolean[] negative = new boolean[n];
-            for (Clause clause : formula.clauses()) {
+            for (int c = 0, total = clauses.size() + learnt.length; c < total; c++) {
+                Clause clause = c < clauses.size() ? clauses.get(c) : learnt[c - clauses.size()];
                 if (isSatisfied(clause, v)) {
                     continue;
                 }
@@ -101,12 +139,14 @@ public final class Propagation {
             for (int j = 0; j < n; j++) {
                 if (v[j] < 0 && positive[j] != negative[j]) {
                     v[j] = (byte) (positive[j] ? 1 : 0);
-                    fixedCount++;
+                    trailVars[trail] = j;
+                    trailReasons[trail++] = null;
                     changed = true;
                 }
             }
         }
-        return new Outcome(PartialAssignment.fromValues(v), fixedCount);
+        return new Outcome(PartialAssignment.fromValues(v), trail, null,
+                java.util.Arrays.copyOf(trailVars, trail), java.util.Arrays.copyOf(trailReasons, trail));
     }
 
     /**

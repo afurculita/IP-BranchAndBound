@@ -26,11 +26,14 @@ import ro.uaic.info.tubb.TuBranchAndBoundSolver.SearchStrategy;
  * usage: java -jar IP-BranchAndBound-all.jar [options] FILE_OR_DIR...
  *   --bfs              width-first search (default, as in the paper)
  *   --dfs              depth-first search
- *   --dynamic          re-rank the variables of the reduced problem at every node
- *   --no-propagation   disable unit propagation and pure-literal elimination
- *   --lp dual|simplex  warm-started dual simplex (default) or rebuilt Commons Math simplex
+ *   --rule static|dynamic|jw   branching rule: paper's static order (default), per-node non-TU ranking,
+ *                              or Jeroslow-Wang
+ *   --dynamic          same as --rule dynamic
+ *   --no-propagation   disable unit propagation and pure-literal elimination (and learning)
+ *   --no-learning      disable clause learning
+ *   --lp dual|tableau|simplex  revised dual simplex (default), tableau dual simplex, or rebuilt Commons Math simplex
  *   --threads N        number of worker threads (default 1)
- *   --paper            the method exactly as published: --bfs, no propagation, static order, 1 thread
+ *   --paper            the method exactly as published: --bfs, no propagation or learning, static order, 1 thread
  *   --max-nodes N      give up after N nodes (answer UNKNOWN)
  *   --no-model         do not print the satisfying assignment
  *   -h, --help         this message
@@ -70,19 +73,36 @@ public final class Main {
                 case "--bfs" -> options = options.withStrategy(SearchStrategy.BREADTH_FIRST);
                 case "--dfs" -> options = options.withStrategy(SearchStrategy.DEPTH_FIRST);
                 case "--dynamic" -> options = options.withBranchingRule(BranchingRule.DYNAMIC);
+                case "--rule" -> {
+                    if (i + 1 >= args.length) {
+                        err.println("error: --rule requires a value (static, dynamic or jw)");
+                        return EXIT_ERROR;
+                    }
+                    switch (args[++i]) {
+                        case "static" -> options = options.withBranchingRule(BranchingRule.STATIC);
+                        case "dynamic" -> options = options.withBranchingRule(BranchingRule.DYNAMIC);
+                        case "jw" -> options = options.withBranchingRule(BranchingRule.JEROSLOW_WANG);
+                        default -> {
+                            err.println("error: unknown branching rule '" + args[i] + "' (expected static, dynamic or jw)");
+                            return EXIT_ERROR;
+                        }
+                    }
+                }
                 case "--no-propagation" -> options = options.withPropagation(false);
+                case "--no-learning" -> options = options.withLearning(false);
                 case "--paper" -> options = Options.paper();
                 case "--no-model" -> printModel = false;
                 case "--lp" -> {
                     if (i + 1 >= args.length) {
-                        err.println("error: --lp requires a value (dual or simplex)");
+                        err.println("error: --lp requires a value (dual, tableau or simplex)");
                         return EXIT_ERROR;
                     }
                     switch (args[++i]) {
                         case "dual" -> options = options.withRelaxationSolvers(RelaxationSolverFactory.dualSimplex());
+                        case "tableau" -> options = options.withRelaxationSolvers(RelaxationSolverFactory.tableauDualSimplex());
                         case "simplex" -> options = options.withRelaxationSolvers(RelaxationSolverFactory.commonsMathSimplex());
                         default -> {
-                            err.println("error: unknown LP solver '" + args[i] + "' (expected dual or simplex)");
+                            err.println("error: unknown LP solver '" + args[i] + "' (expected dual, tableau or simplex)");
                             return EXIT_ERROR;
                         }
                     }
@@ -164,7 +184,7 @@ public final class Main {
                 result.branchingOrder().unranked().size());
         out.printf(Locale.ROOT, "c nodes: %d explored, %d relaxations solved, %d falsified, %d pruned, max active %d%n",
                 st.nodesExplored(), st.lpSolved(), st.nodesFalsified(), st.nodesPruned(), st.maxQueueSize());
-        out.printf(Locale.ROOT, "c propagation: %d variables fixed%n", st.propagatedVariables());
+        out.printf(Locale.ROOT, "c propagation: %d variables fixed, %d clauses learnt%n", st.propagatedVariables(), st.learntClauses());
         out.printf(Locale.ROOT, "c time: %.3f s%n", st.elapsed().toNanos() / 1e9);
         switch (result.status()) {
             case SATISFIABLE -> {
@@ -212,11 +232,14 @@ public final class Main {
         out.println("usage: java -jar IP-BranchAndBound-all.jar [options] FILE_OR_DIR...");
         out.println("  --bfs              width-first search (default, as in the paper)");
         out.println("  --dfs              depth-first search");
-        out.println("  --dynamic          re-rank the variables of the reduced problem at every node");
-        out.println("  --no-propagation   disable unit propagation and pure-literal elimination");
-        out.println("  --lp dual|simplex  warm-started dual simplex (default) or rebuilt Commons Math simplex");
+        out.println("  --rule static|dynamic|jw   branching rule: paper's static order (default), per-node non-TU");
+        out.println("                     ranking, or Jeroslow-Wang");
+        out.println("  --dynamic          same as --rule dynamic");
+        out.println("  --no-propagation   disable unit propagation and pure-literal elimination (and learning)");
+        out.println("  --no-learning      disable clause learning");
+        out.println("  --lp dual|tableau|simplex  revised dual simplex (default), tableau dual simplex, or rebuilt Commons Math simplex");
         out.println("  --threads N        number of worker threads (default 1)");
-        out.println("  --paper            the method exactly as published: --bfs, no propagation, static order, 1 thread");
+        out.println("  --paper            the method exactly as published: --bfs, no propagation or learning, static order, 1 thread");
         out.println("  --max-nodes N      give up after N nodes (answer UNKNOWN)");
         out.println("  --no-model         do not print the satisfying assignment");
         out.println("  -h, --help         this message");

@@ -24,11 +24,12 @@ public record SatResult(Status status, Optional<boolean[]> model, Statistics sta
      * @param nodesFalsified      nodes found infeasible by propagation or a falsified clause, without an LP
      * @param nodesPruned         nodes pruned because their relaxation had a positive value
      * @param propagatedVariables variables fixed by unit propagation and pure-literal elimination
+     * @param learntClauses       clauses learnt from conflicts and prunes
      * @param maxQueueSize        largest number of active nodes held at once
      * @param elapsed             wall-clock time of the whole solve, including the branching order
      */
     public record Statistics(long nodesExplored, long lpSolved, long nodesFalsified, long nodesPruned,
-                             long propagatedVariables, int maxQueueSize, Duration elapsed) {
+                             long propagatedVariables, long learntClauses, int maxQueueSize, Duration elapsed) {
     }
 
     public boolean isSatisfiable() {

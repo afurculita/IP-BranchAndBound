@@ -32,15 +32,22 @@ class TuBranchAndBoundSolverTest {
     /** Named configurations covering every option. */
     static Map<String, Options> configurations() {
         Map<String, Options> configs = new LinkedHashMap<>();
+        Options dfs = Options.defaults().withStrategy(SearchStrategy.DEPTH_FIRST);
         configs.put("paper", Options.paper());
         configs.put("paper, commons-math simplex", Options.paper().withRelaxationSolvers(RelaxationSolverFactory.commonsMathSimplex()));
-        configs.put("default (bfs, propagation)", Options.defaults());
-        configs.put("dfs, propagation", Options.defaults().withStrategy(SearchStrategy.DEPTH_FIRST));
-        configs.put("bfs, dynamic, propagation", Options.defaults().withBranchingRule(BranchingRule.DYNAMIC));
-        configs.put("dfs, dynamic, propagation", Options.defaults().withStrategy(SearchStrategy.DEPTH_FIRST).withBranchingRule(BranchingRule.DYNAMIC));
+        configs.put("paper, tableau dual simplex", Options.paper().withRelaxationSolvers(RelaxationSolverFactory.tableauDualSimplex()));
+        configs.put("default (bfs, propagation, learning)", Options.defaults());
+        configs.put("bfs, propagation, no learning", Options.defaults().withLearning(false));
+        configs.put("dfs, propagation, learning", dfs);
+        configs.put("dfs, propagation, no learning", dfs.withLearning(false));
+        configs.put("bfs, dynamic", Options.defaults().withBranchingRule(BranchingRule.DYNAMIC));
+        configs.put("dfs, dynamic", dfs.withBranchingRule(BranchingRule.DYNAMIC));
+        configs.put("dfs, jeroslow-wang", dfs.withBranchingRule(BranchingRule.JEROSLOW_WANG));
         configs.put("dfs, dynamic, no propagation", Options.paper().withStrategy(SearchStrategy.DEPTH_FIRST).withBranchingRule(BranchingRule.DYNAMIC));
-        configs.put("dfs, propagation, 3 threads", Options.defaults().withStrategy(SearchStrategy.DEPTH_FIRST).withThreads(3));
+        configs.put("dfs, learning, 3 threads", dfs.withThreads(3));
+        configs.put("dfs, jeroslow-wang, no learning, 4 threads", dfs.withBranchingRule(BranchingRule.JEROSLOW_WANG).withLearning(false).withThreads(4));
         configs.put("bfs, dynamic, no propagation, 2 threads", Options.paper().withBranchingRule(BranchingRule.DYNAMIC).withThreads(2));
+        configs.put("bfs, learning, 2 threads", Options.defaults().withThreads(2));
         return configs;
     }
 
@@ -101,10 +108,30 @@ class TuBranchAndBoundSolverTest {
         SatResult r = new TuBranchAndBoundSolver(Options.paper()).solve(f);
         assertEquals(2, r.statistics().nodesPruned());
         assertEquals(0, r.statistics().propagatedVariables());
+        assertEquals(0, r.statistics().learntClauses());
 
         SatResult withPropagation = new TuBranchAndBoundSolver().solve(f);
         assertEquals(2, withPropagation.statistics().nodesFalsified());
         assertTrue(withPropagation.statistics().propagatedVariables() > 0);
+    }
+
+    @Test
+    void learningRecordsClausesOnUnsatisfiableInstances() {
+        CnfFormula f = LongStream.rangeClosed(1, 50).mapToObj(seed -> RandomCnf.kSat(14, 64, 3, seed))
+                .filter(g -> !Sat4jOracle.isSatisfiable(g)).findFirst().orElseThrow();
+        SatResult r = new TuBranchAndBoundSolver(Options.defaults().withStrategy(SearchStrategy.DEPTH_FIRST)).solve(f);
+        assertUnsatisfiable(r);
+        assertTrue(r.statistics().learntClauses() > 0, r.statistics().toString());
+    }
+
+    @Test
+    void largerUnsatisfiableInstanceWithEveryExtension() {
+        CnfFormula f = RandomCnf.kSat(30, 140, 3, 77L);
+        Options options = Options.defaults().withStrategy(SearchStrategy.DEPTH_FIRST)
+                .withBranchingRule(BranchingRule.DYNAMIC).withThreads(4);
+        SatResult r = new TuBranchAndBoundSolver(options).solve(f);
+        boolean expected = Sat4jOracle.isSatisfiable(f);
+        assertEquals(expected ? Status.SATISFIABLE : Status.UNSATISFIABLE, r.status());
     }
 
     @ParameterizedTest(name = "{0}")
@@ -217,15 +244,20 @@ class TuBranchAndBoundSolverTest {
         assertThrows(NullPointerException.class, () -> Options.defaults().withLpSolver(null));
         assertThrows(NullPointerException.class, () -> Options.defaults().withRelaxationSolvers(null));
         assertThrows(NullPointerException.class, () -> Options.defaults().withBranchingRule(null));
+        assertThrows(IllegalArgumentException.class, () -> Options.defaults().withMaxTriangles(0));
         assertThrows(IllegalArgumentException.class, () -> new Options(RelaxationSolverFactory.dualSimplex(),
-                SearchStrategy.BREADTH_FIRST, BranchingRule.STATIC, true, 1, 1, 0.5));
+                SearchStrategy.BREADTH_FIRST, BranchingRule.STATIC, true, true, 1, 1, 1, 0.5));
+        assertThrows(IllegalArgumentException.class, () -> Options.paper().withLearning(true), "learning needs propagation");
         assertThrows(NullPointerException.class, () -> new TuBranchAndBoundSolver(null));
 
         Options defaults = new TuBranchAndBoundSolver().options();
         assertEquals(SearchStrategy.BREADTH_FIRST, defaults.strategy());
         assertEquals(BranchingRule.STATIC, defaults.branchingRule());
         assertTrue(defaults.propagation());
+        assertTrue(defaults.learning());
         assertEquals(1, defaults.threads());
         assertFalse(Options.paper().propagation());
+        assertFalse(Options.paper().learning());
+        assertFalse(Options.defaults().withPropagation(false).learning(), "disabling propagation disables learning");
     }
 }

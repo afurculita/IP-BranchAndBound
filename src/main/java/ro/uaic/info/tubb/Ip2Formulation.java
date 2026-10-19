@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.List;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import ro.uaic.info.cnf.Clause;
 import ro.uaic.info.cnf.CnfFormula;
 import ro.uaic.info.cnf.Literal;
@@ -23,7 +26,10 @@ import ro.uaic.info.cnf.Literal;
  */
 public final class Ip2Formulation {
 
+    private static final Logger LOGGER = LogManager.getLogger(Ip2Formulation.class);
+
     private final CnfFormula formula;
+    private boolean truncated;
     private final int[] freeVariables;
     private final int k;
     private final int m;
@@ -160,7 +166,26 @@ public final class Ip2Formulation {
      * than the {@code (2k)³} triples of the brute-force enumeration.
      */
     public List<Coupling> tripleCouplings() {
+        return tripleCouplings(Long.MAX_VALUE);
+    }
+
+    /**
+     * Whether the last {@link #tripleCouplings(long)} call stopped early because it reached its bound; the
+     * degrees are then computed from a subset of the triangles.
+     */
+    public boolean wasTruncated() {
+        return truncated;
+    }
+
+    /**
+     * {@link #tripleCouplings()} examining at most {@code maxTriangles} triangles of the co-occurrence graph.
+     * On dense formulas with long clauses the number of triangles grows cubically; the bound keeps the
+     * ranking affordable at the price of approximate degrees (see {@link #wasTruncated()}).
+     */
+    public List<Coupling> tripleCouplings(long maxTriangles) {
         int cols = 2 * k;
+        long examined = 0;
+        truncated = false;
         BitSet[] neighbours = new BitSet[cols];
         for (int c = 0; c < cols; c++) {
             neighbours[c] = new BitSet(cols);
@@ -187,6 +212,11 @@ public final class Ip2Formulation {
                 BitSet common = (BitSet) neighbours[i].clone();
                 common.and(neighbours[j]);
                 for (int l = common.nextSetBit(j + 1); l >= 0; l = common.nextSetBit(l + 1)) {
+                    if (examined++ >= maxTriangles) {
+                        truncated = true;
+                        LOGGER.warn("(IP2) triangle enumeration stopped after {} triangles; degrees are approximate", maxTriangles);
+                        return couplings;
+                    }
                     int e = tripleDegree(i, j, l);
                     if (e > 0) {
                         couplings.add(new Coupling(new int[] {i, j, l}, e));

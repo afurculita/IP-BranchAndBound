@@ -11,10 +11,15 @@ public interface RelaxationSolverFactory {
     RelaxationSolver create(CnfFormula formula);
 
     /**
-     * Warm-started bounded dual simplex ({@link DualSimplexRelaxationSolver}): the default, one to two
-     * orders of magnitude faster than rebuilding the LP at every node.
+     * Warm-started bounded dual simplex in revised form ({@link RevisedDualSimplexRelaxationSolver}): the
+     * default. Keeps only the basis inverse and sparse columns.
      */
     static RelaxationSolverFactory dualSimplex() {
+        return RevisedDualSimplexRelaxationSolver::new;
+    }
+
+    /** Warm-started bounded dual simplex on a full dense tableau ({@link DualSimplexRelaxationSolver}). */
+    static RelaxationSolverFactory tableauDualSimplex() {
         return DualSimplexRelaxationSolver::new;
     }
 

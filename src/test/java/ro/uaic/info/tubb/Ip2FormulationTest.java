@@ -118,6 +118,19 @@ class Ip2FormulationTest {
         assertEquals(expected, new java.util.HashSet<>(ip2.tripleCouplings()));
     }
 
+    @Test
+    void triangleEnumerationCanBeBounded() {
+        CnfFormula f = RandomCnf.kSat(8, 30, 3, 42L);
+        Ip2Formulation ip2 = new Ip2Formulation(f);
+        List<Coupling> all = ip2.tripleCouplings();
+        assertFalse(ip2.wasTruncated());
+
+        List<Coupling> some = ip2.tripleCouplings(1);
+        assertTrue(ip2.wasTruncated());
+        assertTrue(some.size() <= 1);
+        assertTrue(all.containsAll(some));
+    }
+
     /** Formula over three variables whose clauses contain x_j positively iff rows[i][j] == 1. */
     private static CnfFormula positiveFormula(int[][] rows) {
         int[][] clauses = new int[rows.length][];

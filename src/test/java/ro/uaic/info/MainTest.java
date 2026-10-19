@@ -81,11 +81,23 @@ class MainTest {
         outBytes.reset();
         exit = Main.run(new String[] {"--no-propagation", "datasets/quinn.cnf"}, out, err);
         assertEquals(Main.EXIT_SATISFIABLE, exit, err());
+
+        outBytes.reset();
+        exit = Main.run(new String[] {"--rule", "jw", "--no-learning", "--lp", "tableau", "--no-model",
+                "src/test/resources/cnf/php-3-2.cnf"}, out, err);
+        assertEquals(Main.EXIT_UNSATISFIABLE, exit, err());
+        assertTrue(out().contains("0 clauses learnt"), out());
+
+        outBytes.reset();
+        exit = Main.run(new String[] {"--rule", "static", "--no-model", "src/test/resources/cnf/php-3-2.cnf"}, out, err);
+        assertEquals(Main.EXIT_UNSATISFIABLE, exit, err());
     }
 
     @Test
     void usageErrors() {
         assertEquals(Main.EXIT_ERROR, Main.run(new String[] {"--lp", "bogus", "x.cnf"}, out, err));
+        assertEquals(Main.EXIT_ERROR, Main.run(new String[] {"--rule", "bogus", "x.cnf"}, out, err));
+        assertEquals(Main.EXIT_ERROR, Main.run(new String[] {"--rule"}, out, err));
         assertEquals(Main.EXIT_ERROR, Main.run(new String[] {"--lp"}, out, err));
         assertEquals(Main.EXIT_ERROR, Main.run(new String[] {"--threads", "two", "x.cnf"}, out, err));
         assertEquals(Main.EXIT_ERROR, Main.run(new String[] {"--threads", "0", "x.cnf"}, out, err));

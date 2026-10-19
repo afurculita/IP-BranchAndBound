@@ -61,6 +61,15 @@ class BranchingOrderTest {
     }
 
     @Test
+    void boundedTriangleEnumerationStillYieldsAPermutation() {
+        CnfFormula f = RandomCnf.kSat(15, 64, 3, 3L);
+        BranchingOrder order = BranchingOrder.compute(f, 2);
+        int[] sorted = order.order().clone();
+        java.util.Arrays.sort(sorted);
+        assertArrayEquals(IntStream.range(0, 15).toArray(), sorted);
+    }
+
+    @Test
     void emptyFormula() {
         BranchingOrder order = BranchingOrder.compute(CnfFormula.of(3));
         assertArrayEquals(new int[] {0, 1, 2}, order.order());

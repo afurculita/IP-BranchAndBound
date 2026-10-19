@@ -49,6 +49,14 @@ public final class BranchingOrder {
 
     /** Runs Procedure 1 on the formula. */
     public static BranchingOrder compute(CnfFormula formula) {
+        return compute(formula, Long.MAX_VALUE);
+    }
+
+    /**
+     * Runs Procedure 1 on the formula, examining at most {@code maxTriangles} triangles in the (IP2) phase
+     * (see {@link Ip2Formulation#tripleCouplings(long)}).
+     */
+    public static BranchingOrder compute(CnfFormula formula, long maxTriangles) {
         int n = formula.numVariables();
         boolean[] ranked = new boolean[n];
 
@@ -62,7 +70,7 @@ public final class BranchingOrder {
         int[] free = unrankedVariables(ranked);
         if (free.length > 0) {
             Ip2Formulation ip2 = new Ip2Formulation(formula, free);
-            List<Coupling> triples = ip2.tripleCouplings();
+            List<Coupling> triples = ip2.tripleCouplings(maxTriangles);
             ip2Ranked = NonTuRanker.rank(ip2.numColumns(), triples, ip2::variableOfColumn);
             ip2Ranked.forEach(v -> ranked[v] = true);
             LOGGER.debug("(IP2): {} non-TU triples, {} variables ranked: {}", triples.size(), ip2Ranked.size(), ip2Ranked);

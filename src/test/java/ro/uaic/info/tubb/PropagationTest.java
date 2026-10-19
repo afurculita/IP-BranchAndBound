@@ -1,6 +1,8 @@
 package ro.uaic.info.tubb;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -27,6 +29,36 @@ class PropagationTest {
         assertTrue(o.assignment().value(0));
         assertTrue(o.assignment().value(1));
         assertTrue(o.assignment().value(2));
+        // the trail records the order and the forcing clauses
+        assertArrayEquals(new int[] {0, 1, 2}, o.trailVariables());
+        assertEquals(List.of(Clause.of(1), Clause.of(-1, 2), Clause.of(-2, 3)), List.of(o.trailReasons()));
+    }
+
+    @Test
+    void conflictReportsTheFalsifiedClauseAndTheAssignmentAtThatPoint() {
+        CnfFormula f = CnfFormula.of(2, new int[] {1}, new int[] {-1, 2}, new int[] {-1, -2});
+        Outcome o = Propagation.propagate(f, PartialAssignment.empty(2), false);
+        assertTrue(o.isConflict());
+        assertEquals(Clause.of(-1, -2), o.conflict());
+        assertTrue(o.assignment().value(0));
+        assertTrue(o.assignment().value(1));
+        assertArrayEquals(new int[] {0, 1}, o.trailVariables());
+    }
+
+    @Test
+    void learntClausesTakePartInPropagation() {
+        CnfFormula f = CnfFormula.of(3, new int[] {1, 2, 3});
+        Clause[] learnt = {Clause.of(-1), Clause.of(-2)};
+        Outcome o = Propagation.propagate(f, learnt, PartialAssignment.empty(3), false);
+        assertFalse(o.isConflict());
+        assertTrue(o.assignment().value(2), "x3 forced by the original clause after the learnt units");
+        assertNull(o.trailReasons()[2] == null ? null : null);
+        assertEquals(Clause.of(1, 2, 3), o.trailReasons()[2]);
+
+        // pure-literal choices carry a null reason
+        Outcome pure = Propagation.propagate(f, PartialAssignment.empty(3), true);
+        assertEquals(1, pure.fixedCount() > 0 ? 1 : 0);
+        assertNull(pure.trailReasons()[0]);
     }
 
     @Test

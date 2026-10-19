@@ -19,6 +19,7 @@ import java.util.concurrent.locks.LockSupport;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import ro.uaic.info.cnf.Clause;
 import ro.uaic.info.cnf.CnfFormula;
 import ro.uaic.info.lp.LinearProgramSolver;
 import ro.uaic.info.lp.SimplexLpSolver;
@@ -43,9 +44,10 @@ import ro.uaic.info.lp.SimplexLpSolver;
  * <ul>
  *   <li>a warm-started dual simplex for the relaxations ({@link RelaxationSolverFactory#dualSimplex()});</li>
  *   <li>{@linkplain Propagation unit propagation and pure-literal elimination} after each fixing;</li>
- *   <li>{@linkplain BranchingRule#DYNAMIC dynamic ranking}: the non-TU degrees are recomputed on the reduced
- *       formula of each node;</li>
- *   <li>depth-first search and parallel node evaluation by several worker threads.</li>
+ *   <li>{@linkplain BranchingRule per-node branching rules}: dynamic non-TU ranking of the reduced problem,
+ *       or the Jeroslow–Wang heuristic;</li>
+ *   <li>{@linkplain ConflictAnalyzer clause learning} from propagation conflicts and relaxation prunes;</li>
+ *   <li>depth-first search and parallel node evaluation by several worker threads, with work stealing.</li>
  * </ul>
  *
  * <p>Instances are immutable and thread-safe.
@@ -54,11 +56,18 @@ public final class TuBranchAndBoundSolver {
 
     private static final Logger LOGGER = LogManager.getLogger(TuBranchAndBoundSolver.class);
 
+    /** Longest learnt clause kept, and the size of the learnt clause database. */
+    static final int MAX_LEARNT_LENGTH = 12;
+    static final int MAX_LEARNT_CLAUSES = 20_000;
+
     /** Order in which active nodes are expanded. */
     public enum SearchStrategy {
-        /** The paper's strategy: nodes are expanded level by level (FIFO queue). */
+        /** The paper's strategy: nodes are expanded level by level (FIFO queue shared by all workers). */
         BREADTH_FIRST,
-        /** Nodes are expanded deepest first (LIFO), the {@code x = 0} child before the {@code x = 1} child. */
+        /**
+         * Nodes are expanded deepest first (LIFO), the {@code x = 0} child before the {@code x = 1} child.
+         * Each worker owns a stack and steals the shallowest node of another worker when its own is empty.
+         */
         DEPTH_FIRST
     }
 
@@ -67,10 +76,12 @@ public final class TuBranchAndBoundSolver {
         /** The paper's rule: the next free variable of the static order {@code S} computed once at the root. */
         STATIC,
         /**
-         * Procedure 1 is re-run on the reduced formula of the node and its top-ranked variable is used;
-         * when every non-TU degree is zero the static order is used as fallback.
+         * The variable with the largest non-TU degree on the reduced formula of the node (pair degrees of
+         * (IP1), then triple degrees of (IP2)); ties and the all-zero case fall back to Jeroslow–Wang.
          */
-        DYNAMIC
+        DYNAMIC,
+        /** The two-sided Jeroslow–Wang heuristic, a classic SAT branching rule, for comparison. */
+        JEROSLOW_WANG
     }
 
     /**
@@ -78,15 +89,18 @@ public final class TuBranchAndBoundSolver {
      *
      * @param relaxationSolvers creates the relaxation solver of each worker thread
      * @param strategy          node expansion order
-     * @param branchingRule     static or dynamic choice of the branching variable
+     * @param branchingRule     choice of the branching variable
      * @param propagation       apply unit propagation and pure-literal elimination at every node
+     * @param learning          learn clauses from conflicts and prunes, and propagate with them
      * @param threads           number of worker threads evaluating nodes
      * @param maxNodes          maximum number of nodes to explore before giving up with
      *                          {@link SatResult.Status#UNKNOWN}; {@link Long#MAX_VALUE} for no limit
+     * @param maxTriangles      bound on the (IP2) triangle enumeration of the ranking procedures
      * @param tolerance         numerical tolerance for zero and integrality tests on LP solutions
      */
     public record Options(RelaxationSolverFactory relaxationSolvers, SearchStrategy strategy, BranchingRule branchingRule,
-                          boolean propagation, int threads, long maxNodes, double tolerance) {
+                          boolean propagation, boolean learning, int threads, long maxNodes, long maxTriangles,
+                          double tolerance) {
         public Options {
             Objects.requireNonNull(relaxationSolvers, "relaxationSolvers");
             Objects.requireNonNull(strategy, "strategy");
@@ -97,27 +111,33 @@ public final class TuBranchAndBoundSolver {
             if (maxNodes <= 0) {
                 throw new IllegalArgumentException("maxNodes must be positive");
             }
+            if (maxTriangles <= 0) {
+                throw new IllegalArgumentException("maxTriangles must be positive");
+            }
             if (tolerance < 0 || tolerance >= 0.5) {
                 throw new IllegalArgumentException("tolerance must be in [0, 0.5)");
+            }
+            if (learning && !propagation) {
+                throw new IllegalArgumentException("learning requires propagation");
             }
         }
 
         /**
-         * Warm-started dual simplex, breadth-first search, static branching order, propagation on, one
-         * thread, no node limit, tolerance {@code 1e-6}.
+         * Revised dual simplex, breadth-first search, static branching order, propagation and learning on,
+         * one thread, no node limit, two million triangles, tolerance {@code 1e-6}.
          */
         public static Options defaults() {
             return new Options(RelaxationSolverFactory.dualSimplex(), SearchStrategy.BREADTH_FIRST,
-                    BranchingRule.STATIC, true, 1, Long.MAX_VALUE, SimplexLpSolver.DEFAULT_EPSILON);
+                    BranchingRule.STATIC, true, true, 1, Long.MAX_VALUE, 2_000_000L, SimplexLpSolver.DEFAULT_EPSILON);
         }
 
-        /** The method exactly as in the paper: no propagation, static order, breadth-first, one thread. */
+        /** The method exactly as in the paper: no propagation or learning, static order, breadth-first, one thread. */
         public static Options paper() {
-            return defaults().withPropagation(false);
+            return defaults().withLearning(false).withPropagation(false);
         }
 
         public Options withRelaxationSolvers(RelaxationSolverFactory factory) {
-            return new Options(factory, strategy, branchingRule, propagation, threads, maxNodes, tolerance);
+            return new Options(factory, strategy, branchingRule, propagation, learning, threads, maxNodes, maxTriangles, tolerance);
         }
 
         /** Uses a general-purpose LP solver through a {@link RebuildingRelaxationSolver}. */
@@ -127,23 +147,32 @@ public final class TuBranchAndBoundSolver {
         }
 
         public Options withStrategy(SearchStrategy newStrategy) {
-            return new Options(relaxationSolvers, newStrategy, branchingRule, propagation, threads, maxNodes, tolerance);
+            return new Options(relaxationSolvers, newStrategy, branchingRule, propagation, learning, threads, maxNodes, maxTriangles, tolerance);
         }
 
         public Options withBranchingRule(BranchingRule rule) {
-            return new Options(relaxationSolvers, strategy, rule, propagation, threads, maxNodes, tolerance);
+            return new Options(relaxationSolvers, strategy, rule, propagation, learning, threads, maxNodes, maxTriangles, tolerance);
         }
 
+        /** Disabling propagation also disables learning. */
         public Options withPropagation(boolean enabled) {
-            return new Options(relaxationSolvers, strategy, branchingRule, enabled, threads, maxNodes, tolerance);
+            return new Options(relaxationSolvers, strategy, branchingRule, enabled, learning && enabled, threads, maxNodes, maxTriangles, tolerance);
+        }
+
+        public Options withLearning(boolean enabled) {
+            return new Options(relaxationSolvers, strategy, branchingRule, propagation, enabled, threads, maxNodes, maxTriangles, tolerance);
         }
 
         public Options withThreads(int count) {
-            return new Options(relaxationSolvers, strategy, branchingRule, propagation, count, maxNodes, tolerance);
+            return new Options(relaxationSolvers, strategy, branchingRule, propagation, learning, count, maxNodes, maxTriangles, tolerance);
         }
 
         public Options withMaxNodes(long newMaxNodes) {
-            return new Options(relaxationSolvers, strategy, branchingRule, propagation, threads, newMaxNodes, tolerance);
+            return new Options(relaxationSolvers, strategy, branchingRule, propagation, learning, threads, newMaxNodes, maxTriangles, tolerance);
+        }
+
+        public Options withMaxTriangles(long newMaxTriangles) {
+            return new Options(relaxationSolvers, strategy, branchingRule, propagation, learning, threads, maxNodes, newMaxTriangles, tolerance);
         }
     }
 
@@ -152,8 +181,11 @@ public final class TuBranchAndBoundSolver {
      *
      * @param fixed     the fixings (branching decisions plus propagated variables)
      * @param nextIndex position in the static order from which the next branching variable is searched
+     * @param level     decision level of every fixed variable ({@code null} unless learning)
+     * @param reason    forcing clause of every fixed variable, {@code null} for decisions ({@code null} unless learning)
+     * @param maxLevel  the highest decision level of the node
      */
-    private record Node(PartialAssignment fixed, int nextIndex) {
+    private record Node(PartialAssignment fixed, int nextIndex, int[] level, Clause[] reason, int maxLevel) {
     }
 
     private final Options options;
@@ -173,7 +205,7 @@ public final class TuBranchAndBoundSolver {
     /** Decides the satisfiability of the formula. */
     public SatResult solve(CnfFormula formula) {
         long start = System.nanoTime();
-        BranchingOrder order = BranchingOrder.compute(formula);
+        BranchingOrder order = BranchingOrder.compute(formula, options.maxTriangles());
         LOGGER.debug("branching order: {}", order);
         return new Search(formula, order, start).run();
     }
@@ -192,13 +224,17 @@ public final class TuBranchAndBoundSolver {
         private final CnfFormula formula;
         private final BranchingOrder order;
         private final long start;
+        private final int workers;
 
-        private final ConcurrentLinkedDeque<Node> queue = new ConcurrentLinkedDeque<>();
+        /** BFS: one shared FIFO queue. DFS: one LIFO stack per worker, stolen from the other end. */
+        private final ConcurrentLinkedDeque<Node> shared = new ConcurrentLinkedDeque<>();
+        private final List<ConcurrentLinkedDeque<Node>> stacks = new ArrayList<>();
         private final AtomicInteger queueSize = new AtomicInteger();
         private final AtomicInteger inFlight = new AtomicInteger();
         private final AtomicBoolean finished = new AtomicBoolean();
         private final AtomicReference<boolean[]> model = new AtomicReference<>();
         private final AtomicBoolean nodeLimitHit = new AtomicBoolean();
+        private final LearntClauses learnt;
 
         private final AtomicLong explored = new AtomicLong();
         private final AtomicLong lpSolved = new AtomicLong();
@@ -211,12 +247,20 @@ public final class TuBranchAndBoundSolver {
             this.formula = formula;
             this.order = order;
             this.start = start;
+            this.workers = options.threads();
+            for (int w = 0; w < workers; w++) {
+                stacks.add(new ConcurrentLinkedDeque<>());
+            }
+            this.learnt = options.learning() ? new LearntClauses(MAX_LEARNT_LENGTH, MAX_LEARNT_CLAUSES) : null;
         }
 
         SatResult run() {
-            push(new Node(PartialAssignment.empty(formula.numVariables()), 0), true);
-            if (options.threads() == 1) {
-                work();
+            int n = formula.numVariables();
+            Node root = new Node(PartialAssignment.empty(n), 0,
+                    options.learning() ? new int[n] : null, options.learning() ? new Clause[n] : null, 0);
+            push(0, root);
+            if (workers == 1) {
+                work(0);
             } else {
                 runParallel();
             }
@@ -232,15 +276,16 @@ public final class TuBranchAndBoundSolver {
         }
 
         private void runParallel() {
-            ExecutorService pool = Executors.newFixedThreadPool(options.threads(), runnable -> {
+            ExecutorService pool = Executors.newFixedThreadPool(workers, runnable -> {
                 Thread thread = new Thread(runnable, "tubb-worker");
                 thread.setDaemon(true);
                 return thread;
             });
             try {
                 List<Future<?>> futures = new ArrayList<>();
-                for (int i = 0; i < options.threads(); i++) {
-                    futures.add(pool.submit(this::work));
+                for (int w = 0; w < workers; w++) {
+                    int id = w;
+                    futures.add(pool.submit(() -> work(id)));
                 }
                 for (Future<?> future : futures) {
                     future.get();
@@ -258,17 +303,17 @@ public final class TuBranchAndBoundSolver {
             }
         }
 
-        /** Worker loop; runs on the calling thread when {@code threads == 1}. */
-        private void work() {
+        /** Worker loop; runs on the calling thread when there is a single worker. */
+        private void work(int id) {
             Ip1Relaxation relaxation = new Ip1Relaxation(formula, options.relaxationSolvers().create(formula), options.tolerance());
             while (!finished.get()) {
                 inFlight.incrementAndGet();
-                Node node = queue.pollFirst();
+                Node node = take(id);
                 if (node == null) {
                     inFlight.decrementAndGet();
                     // Termination is sound: a node can only be added by a worker counted in inFlight, so
-                    // reading inFlight == 0 before an empty queue means no node is left or forthcoming.
-                    if (inFlight.get() == 0 && queue.isEmpty()) {
+                    // reading inFlight == 0 before finding every queue empty means no node is left or forthcoming.
+                    if (inFlight.get() == 0 && allEmpty()) {
                         return;
                     }
                     LockSupport.parkNanos(20_000);
@@ -276,14 +321,54 @@ public final class TuBranchAndBoundSolver {
                 }
                 queueSize.decrementAndGet();
                 try {
-                    process(node, relaxation);
+                    process(id, node, relaxation);
                 } finally {
                     inFlight.decrementAndGet();
                 }
             }
         }
 
-        private void process(Node node, Ip1Relaxation relaxation) {
+        private Node take(int id) {
+            if (options.strategy() == SearchStrategy.BREADTH_FIRST) {
+                return shared.pollFirst();
+            }
+            Node node = stacks.get(id).pollFirst();
+            if (node != null) {
+                return node;
+            }
+            // steal the shallowest (largest) subtree of another worker
+            for (int k = 1; k < workers; k++) {
+                node = stacks.get((id + k) % workers).pollLast();
+                if (node != null) {
+                    return node;
+                }
+            }
+            return null;
+        }
+
+        private boolean allEmpty() {
+            if (!shared.isEmpty()) {
+                return false;
+            }
+            for (ConcurrentLinkedDeque<Node> stack : stacks) {
+                if (!stack.isEmpty()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private void push(int id, Node node) {
+            if (options.strategy() == SearchStrategy.BREADTH_FIRST) {
+                shared.addLast(node);
+            } else {
+                stacks.get(id).addFirst(node);
+            }
+            int size = queueSize.incrementAndGet();
+            maxQueue.accumulateAndGet(size, Math::max);
+        }
+
+        private void process(int id, Node node, Ip1Relaxation relaxation) {
             long count = explored.incrementAndGet();
             if (count > options.maxNodes()) {
                 nodeLimitHit.set(true);
@@ -292,14 +377,36 @@ public final class TuBranchAndBoundSolver {
             }
 
             PartialAssignment fixed = node.fixed();
+            int[] level = node.level();
+            Clause[] reason = node.reason();
+            int maxLevel = node.maxLevel();
             if (options.propagation()) {
-                Propagation.Outcome outcome = Propagation.propagate(formula, fixed, true);
+                Clause[] learntSnapshot = learnt == null ? new Clause[0] : learnt.snapshot();
+                Propagation.Outcome outcome = Propagation.propagate(formula, learntSnapshot, fixed, true);
                 propagated.addAndGet(outcome.fixedCount());
-                if (outcome.isConflict()) {
-                    falsified.incrementAndGet();
-                    return;
+                int[] trail = outcome.trailVariables();
+                Clause[] trailReasons = outcome.trailReasons();
+                if (learnt != null) {
+                    // assign levels: implied variables share the latest level, pure literals open a new one
+                    for (int t = 0; t < trail.length; t++) {
+                        if (trailReasons[t] == null) {
+                            maxLevel++;
+                        }
+                        level[trail[t]] = maxLevel;
+                        reason[trail[t]] = trailReasons[t];
+                    }
                 }
                 fixed = outcome.assignment();
+                if (outcome.isConflict()) {
+                    falsified.incrementAndGet();
+                    if (learnt != null) {
+                        Clause clause = ConflictAnalyzer.firstUip(outcome.conflict(), fixed, level, reason, trail, maxLevel);
+                        if (clause != null && learnt.add(clause)) {
+                            LOGGER.trace("learnt {} from a conflict at level {}", clause, maxLevel);
+                        }
+                    }
+                    return;
+                }
             }
 
             Ip1Relaxation.Result result = relaxation.solve(fixed);
@@ -309,43 +416,63 @@ public final class TuBranchAndBoundSolver {
             LOGGER.trace("node {} {}: {} value={}", count, fixed, result.status(), result.value());
             switch (result.status()) {
                 case FALSIFIED -> falsified.incrementAndGet();
-                case POSITIVE -> pruned.incrementAndGet();
+                case POSITIVE -> {
+                    pruned.incrementAndGet();
+                    if (learnt != null) {
+                        Clause clause = ConflictAnalyzer.noGood(fixed, level, reason);
+                        if (clause != null && learnt.add(clause)) {
+                            LOGGER.trace("learnt no-good {} from a positive relaxation", clause);
+                        }
+                    }
+                }
                 case INTEGRAL -> {
                     if (model.compareAndSet(null, result.assignment())) {
                         LOGGER.debug("integral relaxation with {} fixed variables after {} nodes", fixed.numFixed(), count);
                     }
                     finished.set(true);
                 }
-                case FRACTIONAL -> branch(node, fixed);
+                case FRACTIONAL -> branch(id, node, fixed, level, reason, maxLevel);
             }
             if (count % 1000 == 0) {
-                LOGGER.info("{} nodes explored, {} active, {} fixed at the current node", count, queueSize.get(), fixed.numFixed());
+                LOGGER.info("{} nodes explored, {} active, {} fixed at the current node, {} learnt clauses",
+                        count, queueSize.get(), fixed.numFixed(), learnt == null ? 0 : learnt.size());
             }
         }
 
-        private void branch(Node node, PartialAssignment fixed) {
+        private void branch(int id, Node node, PartialAssignment fixed, int[] level, Clause[] reason, int maxLevel) {
             int nextIndex = node.nextIndex();
             while (nextIndex < order.size() && !fixed.isFree(order.variableAt(nextIndex))) {
                 nextIndex++;
             }
-            int variable;
-            if (options.branchingRule() == BranchingRule.DYNAMIC) {
-                variable = dynamicVariable(fixed);
-                if (variable < 0) {
-                    variable = staticVariable(nextIndex);
-                }
-            } else {
+            int variable = -1;
+            if (options.branchingRule() != BranchingRule.STATIC) {
+                variable = NodeRanking.choose(formula, fixed, options.branchingRule(), options.maxTriangles());
+            }
+            if (variable < 0) {
                 variable = staticVariable(nextIndex);
             }
-            Node zero = new Node(fixed.fix(variable, false), nextIndex);
-            Node one = new Node(fixed.fix(variable, true), nextIndex);
+            Node zero = child(fixed, variable, false, nextIndex, level, reason, maxLevel);
+            Node one = child(fixed, variable, true, nextIndex, level, reason, maxLevel);
             if (options.strategy() == SearchStrategy.BREADTH_FIRST) {
-                push(zero, false);
-                push(one, false);
+                push(id, zero);
+                push(id, one);
             } else {
-                push(one, true);
-                push(zero, true);
+                push(id, one);
+                push(id, zero);
             }
+        }
+
+        private Node child(PartialAssignment fixed, int variable, boolean value, int nextIndex,
+                           int[] level, Clause[] reason, int maxLevel) {
+            int[] childLevel = null;
+            Clause[] childReason = null;
+            if (level != null) {
+                childLevel = level.clone();
+                childReason = reason.clone();
+                childLevel[variable] = maxLevel + 1;
+                childReason[variable] = null;
+            }
+            return new Node(fixed.fix(variable, value), nextIndex, childLevel, childReason, maxLevel + 1);
         }
 
         private int staticVariable(int nextIndex) {
@@ -356,31 +483,10 @@ public final class TuBranchAndBoundSolver {
             return order.variableAt(nextIndex);
         }
 
-        /** Top-ranked variable of Procedure 1 on the reduced formula, or {@code -1} if all degrees are zero. */
-        private int dynamicVariable(PartialAssignment fixed) {
-            BranchingOrder local = BranchingOrder.compute(Propagation.reduce(formula, fixed));
-            if (!local.ip1Ranked().isEmpty()) {
-                return local.ip1Ranked().get(0);
-            }
-            if (!local.ip2Ranked().isEmpty()) {
-                return local.ip2Ranked().get(0);
-            }
-            return -1;
-        }
-
-        private void push(Node node, boolean first) {
-            if (first) {
-                queue.addFirst(node);
-            } else {
-                queue.addLast(node);
-            }
-            int size = queueSize.incrementAndGet();
-            maxQueue.accumulateAndGet(size, Math::max);
-        }
-
         private SatResult.Statistics statistics() {
             return new SatResult.Statistics(Math.min(explored.get(), options.maxNodes()), lpSolved.get(), falsified.get(),
-                    pruned.get(), propagated.get(), maxQueue.get(), Duration.ofNanos(System.nanoTime() - start));
+                    pruned.get(), propagated.get(), learnt == null ? 0 : learnt.size(), maxQueue.get(),
+                    Duration.ofNanos(System.nanoTime() - start));
         }
     }
 }
